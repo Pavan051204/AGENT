@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Enterprise AI Copilot</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <!-- Dynamic Background -->
+    <div class="animated-bg">
+      <div class="gradient-1"></div>
+      <div class="gradient-2"></div>
+      <div class="gradient-3"></div>
+    </div>
+
+    <!-- Theme Toggle -->
+    <button class="theme-toggle" id="themeToggle" aria-label="Toggle dark mode">
+      <i class="fas fa-moon toggle-icon"></i>
+    </button>
+
+    <!-- Main Container -->
+    <div class="container">
+      <!-- Sidebar -->
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <div class="logo">
+            <i class="fas fa-bolt logo-icon"></i>
+            <span class="logo-text">AI Copilot</span>
+          </div>
+        </div>
+
+        <div class="config-panel">
+          <h3 class="config-title">Configuration</h3>
+          
+          <div class="form-group">
+            <label for="userId"><i class="fas fa-user"></i> User ID</label>
+            <input id="userId" type="text" placeholder="your-user-id" autocomplete="off" />
+          </div>
+
+          <div class="form-group">
+            <label for="sessionId"><i class="fas fa-link"></i> Session ID</label>
+            <input id="sessionId" type="text" placeholder="session-id" autocomplete="off" />
+          </div>
+
+          <div class="form-group">
+            <label for="role"><i class="fas fa-briefcase"></i> Role</label>
+            <select id="role">
+              <option value="employee">Employee</option>
+              <option value="manager">Manager</option>
+              <option value="hr">HR</option>
+              <option value="finance">Finance</option>
+              <option value="it">IT</option>
+              <option value="admin">Admin</option>
+            </select>
+          </div>
+
+          <div class="divider"></div>
+
+          <h3 class="config-title">AI Model</h3>
+
+          <div class="form-group">
+            <label for="model"><i class="fas fa-brain"></i> Model Provider</label>
+            <select id="model">
+              <option value="openai-fast">🚀 OpenAI (Fast)</option>
+              <option value="openai-pro" selected>⚡ OpenAI (Pro)</option>
+              <option value="groq">🎯 Groq</option>
+              <option value="gemini">🔮 Gemini (Google)</option>
+              <option value="adaptive">🤖 Adaptive (Auto)</option>
+            </select>
+          </div>
+
+          <div class="model-info" id="modelInfo">
+            <div class="info-item">
+              <span class="info-label">Rate Limit:</span>
+              <span class="info-value" id="rateLimit">60 req/min</span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">Latency:</span>
+              <span class="info-value" id="latency">--</span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">Status:</span>
+              <span class="info-value" id="modelStatus">Ready</span>
+            </div>
+          </div>
+
+          <div class="divider"></div>
+
+          <div class="status-indicator">
+            <div class="status-dot" id="statusDot"></div>
+            <span>API: <strong id="apiStatus">Checking...</strong></span>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Main Chat Area -->
+      <main class="main-content">
+        <!-- Header -->
+        <header class="chat-header">
+          <div class="header-content">
+            <h1><i class="fas fa-brain"></i> Enterprise AI Copilot</h1>
+            <p class="header-subtitle">Intelligent Agent Routing & Assistance</p>
+          </div>
+          <div class="header-actions">
+            <button class="action-btn" id="clearChat" title="Clear chat">
+              <i class="fas fa-trash-alt"></i> Clear
+            </button>
+            <button class="action-btn export" id="exportChat" title="Export chat">
+              <i class="fas fa-download"></i> Export
+            </button>
+          </div>
+        </header>
+
+        <!-- Chat Area -->
+        <div class="chat-container">
+          <div class="chat-messages" id="chatLog">
+            <div class="welcome-message">
+              <div class="welcome-icon">
+                <i class="fas fa-robot"></i>
+              </div>
+              <h2>Welcome to AI Copilot!</h2>
+              <p>Start a conversation with your intelligent assistant. Ask about policies, approvals, or get help with your requests.</p>
+              <div class="quick-prompts">
+                <button class="prompt-btn" data-prompt="Can you help me with a reimbursement request?">
+                  <i class="fas fa-receipt"></i> Reimbursement
+                </button>
+                <button class="prompt-btn" data-prompt="What are the company policies?">
+                  <i class="fas fa-book"></i> Policies
+                </button>
+                <button class="prompt-btn" data-prompt="I need approval for something">
+                  <i class="fas fa-check-circle"></i> Get Approval
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Typing Indicator -->
+          <div class="typing-indicator" id="typingIndicator" style="display: none;">
+            <div class="dot"></div>
+            <div class="dot"></div>
+            <div class="dot"></div>
+            <span><i class="fas fa-spinner fa-spin"></i> AI is thinking...</span>
+          </div>
+        </div>
+
+        <!-- Message Composer -->
+        <footer class="composer">
+          <div class="composer-wrapper">
+            <textarea
+              id="message"
+              placeholder="Type your message here... (Shift+Enter for newline)"
+              rows="1"
+            ></textarea>
+            <button class="send-btn" id="sendBtn">
+              <i class="fas fa-paper-plane send-icon"></i>
+              <span class="send-text">Send</span>
+            </button>
+          </div>
+          <div class="composer-hint"><i class="fas fa-keyboard"></i> Press Shift+Enter for new line • Ctrl+Shift+C to clear</div>
+        </footer>
+      </main>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

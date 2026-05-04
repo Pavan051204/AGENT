@@ -1,0 +1,66 @@
+from pathlib import Path
+
+from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+from src.settings import get_config
+from src.core.logging_setup import setup_logging
+from src.orchestration.workflow import run_graph
+from src.tools.mcp_routes import router as tools_router
+from src.tools.database import init_db
+
+
+class ChatRequest(BaseModel):
+    user_id: str
+    role: str
+    query: str
+    session_id: str
+
+
+class ChatResponse(BaseModel):
+    response: str
+    trace_id: str
+    approval_required: bool
+
+
+def create_app() -> FastAPI:
+    setup_logging()
+    init_db()
+    app = FastAPI(title=get_config().app_name)
+    app.include_router(tools_router)
+
+    static_dir = Path(__file__).resolve().parent / "web" / "static"
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+    @app.get("/health")
+    def health() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.get("/")
+    def ui_root() -> FileResponse:
+        return FileResponse(static_dir / "index.html")
+
+    @app.get("/ui")
+    def ui_page() -> FileResponse:
+        return FileResponse(static_dir / "index.html")
+
+    @app.post("/chat", response_model=ChatResponse)
+    def chat(req: ChatRequest) -> ChatResponse:
+        result = run_graph(
+            user_id=req.user_id,
+            role=req.role,
+            query=req.query,
+            session_id=req.session_id,
+        )
+        return ChatResponse(
+            response=result["response"],
+            trace_id=result["trace_id"],
+            approval_required=result["approval_required"],
+        )
+
+    return app
+
+
+app = create_app()
