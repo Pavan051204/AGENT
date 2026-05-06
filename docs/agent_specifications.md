@@ -18,7 +18,7 @@
 - Output: routed_agent, confidence
 
 ## HR Agent
-- Purpose: policy QnA (RAG), leave workflows
+- Purpose: policy QnA, leave workflows
 - Tools: apply_leave, get_leave_balance, list_leave_history
 - Data: HR policies, SQL leave tables
 - Approval: leave above threshold
@@ -34,11 +34,6 @@
 - Tools: fetch_payslip, submit_reimbursement, list_reimbursements
 - Data: SQL finance tables, finance policy docs
 - Approval: high value reimbursements
-
-## RAG Agent
-- Purpose: retrieve relevant documents for other agents
-- Tools: vector_search
-- Data: vector DB, file storage
 
 ## Approval Agent
 - Purpose: route human approvals and capture decisions

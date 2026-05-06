@@ -1,11 +1,12 @@
-from typing import TypedDict
+from typing import Literal, TypedDict
 from uuid import uuid4
 
 from langgraph.graph import END, StateGraph
 
 from src.agents.agent_registry import AGENT_REGISTRY
+from src.core.access_control import check_access
 from src.core.memory_manager import MemoryManager
-from src.core.access_control import check_access, INTENT_GENERAL
+from src.tools import database
 
 memory_manager = MemoryManager()
 
@@ -15,53 +16,182 @@ class GraphState(TypedDict, total=False):
     role: str
     query: str
     session_id: str
-    intent: str
-    routed_agent: str
     response: str
     approval_required: bool
     trace_id: str
+    model_used: str
+    model_preference: str
+    intent: str
 
 
-def _preprocess(state: GraphState) -> GraphState:
-    query = state.get("query", "").lower()
-    if any(k in query for k in ["leave", "policy", "maternity", "hr"]):
-        intent = "hr"
-    elif any(k in query for k in ["ticket", "vpn", "laptop", "it", "asset"]):
-        intent = "it"
-    elif any(k in query for k in ["payslip", "reimbursement", "tax", "finance"]):
-        intent = "finance"
-    else:
-        intent = INTENT_GENERAL
+# ---------------------------------------------------------------------------
+# Intent keywords — lightweight classification without an LLM call
+# ---------------------------------------------------------------------------
+
+_HR_LEAVE_KEYWORDS = [
+    "leave", "apply leave", "cancel leave", "leave balance", "leave history",
+    "pending leave", "leave status", "approval status", "holiday", "calendar",
+    "day off", "time off", "vacation", "sick leave", "casual leave",
+]
+
+_HR_POLICY_KEYWORDS = [
+    "policy", "handbook", "guideline", "notice period", "work from home",
+    "wfh", "maternity", "paternity", "probation", "code of conduct",
+    "dress code", "appraisal", "performance review", "resignation",
+    "termination", "onboarding", "benefits", "insurance", "gratuity",
+]
+
+_IT_KEYWORDS = [
+    "ticket", "laptop", "vpn", "printer", "outlook", "email issue",
+    "network", "software install", "it support", "it help", "asset",
+    "monitor", "keyboard", "mouse", "license", "password reset",
+    "access request", "hardware",
+]
+
+_FINANCE_KEYWORDS = [
+    "payslip", "salary", "reimbursement", "reimburse", "claim",
+    "tax", "pf", "provident fund", "ctc", "investment", "declaration",
+    "payroll", "expense", "receipt",
+]
+
+
+def _classify_intent(query: str) -> str:
+    """Keyword-based intent classification.
+
+    Returns one of: hr-leave, hr-policy, it, finance, general.
+    Uses a simple scoring approach — whichever category has the most
+    keyword matches wins.
+    """
+    q = query.lower()
+
+    scores = {
+        "hr-leave": 0,
+        "hr-policy": 0,
+        "it": 0,
+        "finance": 0,
+    }
+
+    for kw in _HR_LEAVE_KEYWORDS:
+        if kw in q:
+            scores["hr-leave"] += 1
+
+    for kw in _HR_POLICY_KEYWORDS:
+        if kw in q:
+            scores["hr-policy"] += 1
+
+    for kw in _IT_KEYWORDS:
+        if kw in q:
+            scores["it"] += 1
+
+    for kw in _FINANCE_KEYWORDS:
+        if kw in q:
+            scores["finance"] += 1
+
+    best = max(scores, key=scores.get)  # type: ignore[arg-type]
+    if scores[best] == 0:
+        return "general"
+    return best
+
+
+# ---------------------------------------------------------------------------
+# Graph Nodes
+# ---------------------------------------------------------------------------
+
+def _intent_detection(state: GraphState) -> GraphState:
+    """Node 1 — detect intent from the user query."""
+    intent = _classify_intent(state["query"])
     state["intent"] = intent
+    database.log_event(state["user_id"], "intent_detected", f"intent={intent} query={state['query'][:100]}")
     return state
 
 
-def _rbac(state: GraphState) -> GraphState:
-    if not check_access(state["role"], state["intent"]):
-        state["response"] = "Access denied for this request."
-        state["approval_required"] = False
-        return state
+def _role_validation(state: GraphState) -> GraphState:
+    """Node 2 — validate that the user's role is allowed for this intent."""
+    intent = state.get("intent", "general")
+
+    # Map sub-intents to top-level access categories
+    access_map = {
+        "hr-leave": "hr",
+        "hr-policy": "hr",
+        "it": "it",
+        "finance": "finance",
+        "general": "general",
+    }
+    access_category = access_map.get(intent, "general")
+
+    if not check_access(state["role"], access_category):
+        state["response"] = (
+            f"🔒 **Access Denied**\n\n"
+            f"Your role **{state['role']}** does not have access to **{access_category}** operations.\n"
+            "Please contact your administrator if you believe this is an error."
+        )
+        state["intent"] = "blocked"
+
     return state
 
 
-def _route(state: GraphState) -> GraphState:
-    intent = state.get("intent", INTENT_GENERAL)
-    if intent in AGENT_REGISTRY:
-        state["routed_agent"] = intent
-    else:
-        state["routed_agent"] = "general"
-    return state
+def _route_agent(state: GraphState) -> str:
+    """Conditional edge — decide which agent to run based on intent."""
+    intent = state.get("intent", "general")
+    route_map = {
+        "hr-leave": "hr_agent",
+        "hr-policy": "rag_agent",
+        "it": "it_agent",
+        "finance": "finance_agent",
+        "general": "rag_agent",
+        "blocked": "respond",
+    }
+    return route_map.get(intent, "rag_agent")
 
 
-def _agent(state: GraphState) -> GraphState:
-    agent = AGENT_REGISTRY.get(state["routed_agent"], AGENT_REGISTRY["general"])
+def _hr_agent(state: GraphState) -> GraphState:
+    """HR Agent node — handles leave management."""
+    agent = AGENT_REGISTRY.get("hr")
     result = agent.handle(state)
     state["response"] = result.response
     state["approval_required"] = result.approval_required
+    state["model_used"] = "hr-agent (rule-based)"
+    return state
+
+
+def _rag_agent(state: GraphState) -> GraphState:
+    """RAG Agent node — policy questions and general queries."""
+    agent = AGENT_REGISTRY.get("rag")
+    result = agent.handle(state)
+    state["response"] = result.response
+    state["approval_required"] = result.approval_required
+    if hasattr(agent, "model"):
+        state["model_used"] = agent.model
+    return state
+
+
+def _it_agent(state: GraphState) -> GraphState:
+    """IT Agent node — ticket and asset management."""
+    agent = AGENT_REGISTRY.get("it")
+    result = agent.handle(state)
+    state["response"] = result.response
+    state["approval_required"] = result.approval_required
+    state["model_used"] = "it-agent"
+    return state
+
+
+def _finance_agent(state: GraphState) -> GraphState:
+    """Finance Agent node — payslip, reimbursement, tax queries."""
+    agent = AGENT_REGISTRY.get("finance")
+    result = agent.handle(state)
+    state["response"] = result.response
+    state["approval_required"] = result.approval_required
+    state["model_used"] = "finance-agent"
+    return state
+
+
+def _respond(state: GraphState) -> GraphState:
+    """Pass-through node for blocked/pre-set responses."""
     return state
 
 
 def _memory(state: GraphState) -> GraphState:
+    """Save conversation to short-term and long-term memory."""
     memory_manager.add_message(
         state["session_id"],
         {"role": state["role"], "query": state["query"], "response": state["response"]},
@@ -70,25 +200,76 @@ def _memory(state: GraphState) -> GraphState:
     return state
 
 
-def build_graph() -> StateGraph:
-    graph = StateGraph(GraphState)
-    graph.add_node("preprocess", _preprocess)
-    graph.add_node("rbac", _rbac)
-    graph.add_node("route", _route)
-    graph.add_node("agent", _agent)
-    graph.add_node("memory", _memory)
+def _log_trace(state: GraphState) -> GraphState:
+    """Log the full trace of this request."""
+    database.log_event(
+        state["user_id"],
+        "chat_response",
+        f"trace={state.get('trace_id', '')} intent={state.get('intent', '')} "
+        f"model={state.get('model_used', '')} approval={state.get('approval_required', False)}",
+    )
+    return state
 
-    graph.set_entry_point("preprocess")
-    graph.add_edge("preprocess", "rbac")
-    graph.add_edge("rbac", "route")
-    graph.add_edge("route", "agent")
-    graph.add_edge("agent", "memory")
-    graph.add_edge("memory", END)
+
+# ---------------------------------------------------------------------------
+# Build the LangGraph
+# ---------------------------------------------------------------------------
+
+def build_graph() -> StateGraph:
+    """Build the multi-agent LangGraph workflow.
+
+    Flow:
+        User Query
+         → intent_detection
+         → role_validation
+         → [conditional] route to correct agent (hr / rag / it / finance / respond)
+         → memory
+         → log_trace
+         → END
+    """
+    graph = StateGraph(GraphState)
+
+    # Add nodes
+    graph.add_node("intent_detection", _intent_detection)
+    graph.add_node("role_validation", _role_validation)
+    graph.add_node("hr_agent", _hr_agent)
+    graph.add_node("rag_agent", _rag_agent)
+    graph.add_node("it_agent", _it_agent)
+    graph.add_node("finance_agent", _finance_agent)
+    graph.add_node("respond", _respond)
+    graph.add_node("memory", _memory)
+    graph.add_node("log_trace", _log_trace)
+
+    # Edges
+    graph.set_entry_point("intent_detection")
+    graph.add_edge("intent_detection", "role_validation")
+
+    # Conditional routing after role validation
+    graph.add_conditional_edges(
+        "role_validation",
+        _route_agent,
+        {
+            "hr_agent": "hr_agent",
+            "rag_agent": "rag_agent",
+            "it_agent": "it_agent",
+            "finance_agent": "finance_agent",
+            "respond": "respond",
+        },
+    )
+
+    # All agents converge to memory → log → END
+    graph.add_edge("hr_agent", "memory")
+    graph.add_edge("rag_agent", "memory")
+    graph.add_edge("it_agent", "memory")
+    graph.add_edge("finance_agent", "memory")
+    graph.add_edge("respond", "memory")
+    graph.add_edge("memory", "log_trace")
+    graph.add_edge("log_trace", END)
 
     return graph.compile()
 
 
-def run_graph(user_id: str, role: str, query: str, session_id: str) -> GraphState:
+def run_graph(user_id: str, role: str, query: str, session_id: str, model_preference: str = "gemini") -> GraphState:
     graph = build_graph()
     trace_id = f"trace_{uuid4().hex[:8]}"
     initial_state: GraphState = {
@@ -98,6 +279,8 @@ def run_graph(user_id: str, role: str, query: str, session_id: str) -> GraphStat
         "session_id": session_id,
         "trace_id": trace_id,
         "approval_required": False,
+        "model_preference": model_preference,
+        "intent": "",
     }
     result = graph.invoke(initial_state)
     result["trace_id"] = trace_id

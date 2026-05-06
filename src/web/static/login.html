@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Enterprise AI Copilot — Sign In</title>
+    <meta name="description" content="Enterprise Multi-Agent AI Copilot for HR, IT, and Finance Operations. Secure login portal." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
+    <link rel="stylesheet" href="/static/login.css" />
+  </head>
+  <body>
+    <!-- Animated background particles -->
+    <div class="bg-particles" id="bgParticles"></div>
+
+    <!-- Main Auth Container -->
+    <div class="auth-wrapper">
+      <!-- Left branding panel -->
+      <div class="auth-branding">
+        <div class="branding-content">
+          <div class="brand-logo">
+            <div class="logo-orb">
+              <i class="fas fa-brain"></i>
+            </div>
+          </div>
+          <h1 class="brand-title">Enterprise AI Copilot</h1>
+          <p class="brand-subtitle">Multi-Agent Intelligence for HR, IT &amp; Finance</p>
+
+          <div class="brand-features">
+            <div class="feature-item">
+              <div class="feature-icon"><i class="fas fa-shield-halved"></i></div>
+              <div class="feature-text">
+                <strong>Role-Based Access</strong>
+                <span>Secure RBAC for every department</span>
+              </div>
+            </div>
+            <div class="feature-item">
+              <div class="feature-icon"><i class="fas fa-file-pdf"></i></div>
+              <div class="feature-text">
+                <strong>RAG-Powered</strong>
+                <span>Answers from your policy documents</span>
+              </div>
+            </div>
+            <div class="feature-item">
+              <div class="feature-icon"><i class="fas fa-robot"></i></div>
+              <div class="feature-text">
+                <strong>Multi-Agent</strong>
+                <span>Specialized agents for each workflow</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="branding-footer">
+          <p>&copy; 2026 Enterprise AI Copilot</p>
+        </div>
+      </div>
+
+      <!-- Right auth form panel -->
+      <div class="auth-form-panel">
+        <div class="auth-form-container">
+          <!-- Tab switcher -->
+          <div class="auth-tabs" id="authTabs">
+            <button class="auth-tab active" data-tab="login" id="loginTab">
+              <i class="fas fa-right-to-bracket"></i> Sign In
+            </button>
+            <button class="auth-tab" data-tab="register" id="registerTab">
+              <i class="fas fa-user-plus"></i> Create Account
+            </button>
+            <div class="tab-indicator" id="tabIndicator"></div>
+          </div>
+
+          <!-- Login Form -->
+          <form class="auth-form" id="loginForm">
+            <div class="form-header">
+              <h2>Welcome back</h2>
+              <p>Sign in to access your copilot</p>
+            </div>
+
+            <div class="input-group">
+              <div class="input-icon"><i class="fas fa-user"></i></div>
+              <input
+                type="text"
+                id="loginUsername"
+                placeholder="Username"
+                autocomplete="username"
+                required
+              />
+            </div>
+
+            <div class="input-group">
+              <div class="input-icon"><i class="fas fa-lock"></i></div>
+              <input
+                type="password"
+                id="loginPassword"
+                placeholder="Password"
+                autocomplete="current-password"
+                required
+              />
+              <button type="button" class="toggle-password" data-target="loginPassword">
+                <i class="fas fa-eye"></i>
+              </button>
+            </div>
+
+            <div class="form-message" id="loginMessage"></div>
+
+            <button type="submit" class="auth-submit" id="loginSubmit">
+              <span class="btn-text">Sign In</span>
+              <span class="btn-loader" style="display:none;"><i class="fas fa-spinner fa-spin"></i></span>
+              <i class="fas fa-arrow-right btn-arrow"></i>
+            </button>
+          </form>
+
+          <!-- Register Form -->
+          <form class="auth-form hidden" id="registerForm">
+            <div class="form-header">
+              <h2>Create Account</h2>
+              <p>Register to get started</p>
+            </div>
+
+            <div class="input-group">
+              <div class="input-icon"><i class="fas fa-user"></i></div>
+              <input
+                type="text"
+                id="registerUsername"
+                placeholder="Choose a username"
+                autocomplete="username"
+                required
+              />
+            </div>
+
+            <div class="input-group">
+              <div class="input-icon"><i class="fas fa-lock"></i></div>
+              <input
+                type="password"
+                id="registerPassword"
+                placeholder="Create a password"
+                autocomplete="new-password"
+                required
+              />
+              <button type="button" class="toggle-password" data-target="registerPassword">
+                <i class="fas fa-eye"></i>
+              </button>
+            </div>
+
+            <div class="input-group">
+              <div class="input-icon"><i class="fas fa-user-tag"></i></div>
+              <select id="registerRole" required>
+                <option value="" disabled selected>Select your role</option>
+                <option value="employee">👤 Employee</option>
+                <option value="manager">👔 Manager</option>
+                <option value="hr">🧑‍💼 HR Team</option>
+                <option value="it">💻 IT Team</option>
+                <option value="finance">💰 Finance Team</option>
+                <option value="admin">🛡️ Admin</option>
+              </select>
+            </div>
+
+            <div class="form-message" id="registerMessage"></div>
+
+            <button type="submit" class="auth-submit" id="registerSubmit">
+              <span class="btn-text">Create Account</span>
+              <span class="btn-loader" style="display:none;"><i class="fas fa-spinner fa-spin"></i></span>
+              <i class="fas fa-arrow-right btn-arrow"></i>
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <script src="/static/login.js"></script>
+  </body>
+</html>
