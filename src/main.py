@@ -18,6 +18,12 @@ from src.tools.database import (
     get_hr_users, get_approvals_for_hr,
     deduct_leave_balance, restore_leave_balance,
     count_working_days, _get_conn,
+    # IT-specific
+    get_ticket_by_id, list_tickets, get_all_tickets,
+    get_open_tickets_for_user, get_it_pending_approvals,
+    assign_ticket, resolve_ticket, update_ticket_status,
+    get_asset_by_id, list_assets, get_all_assets,
+    update_asset_status, get_it_users,
 )
 from src.tools.pdf_ingest import ingest_pdfs
 
@@ -212,15 +218,16 @@ def create_app() -> FastAPI:
 
     @app.get("/api/approvals/pending")
     def pending_approvals(current_user: dict = Depends(get_current_user)) -> dict:
-        """Get pending approvals.  HR sees their assigned; manager/admin see all."""
+        """Get pending approvals.  HR sees leave; IT sees tickets/assets; manager/admin see all."""
         role = current_user["role"]
         username = current_user["username"]
-        if role not in ("manager", "hr", "admin"):
-            return {"error": "Access denied. Only managers, HR, and admins can view approvals.", "approvals": []}
+        if role not in ("manager", "hr", "it", "admin"):
+            return {"error": "Access denied. Only managers, HR, IT, and admins can view approvals.", "approvals": []}
 
         if role == "hr":
-            # HR sees only approvals assigned to them
             approvals = get_approvals_for_hr(username)
+        elif role == "it":
+            approvals = get_it_pending_approvals()
         else:
             approvals = get_pending_approvals(role)
 
@@ -231,6 +238,14 @@ def create_app() -> FastAPI:
                 leave = get_leave_by_id(a["request_id"])
                 if leave:
                     item["leave_details"] = leave
+            elif a["request_type"] == "ticket":
+                ticket = get_ticket_by_id(a["request_id"])
+                if ticket:
+                    item["ticket_details"] = ticket
+            elif a["request_type"] == "asset":
+                asset = get_asset_by_id(a["request_id"])
+                if asset:
+                    item["asset_details"] = asset
             enriched.append(item)
         return {"approvals": enriched}
 
@@ -240,9 +255,9 @@ def create_app() -> FastAPI:
         decision: ApprovalDecision,
         current_user: dict = Depends(get_current_user),
     ) -> dict:
-        """Approve or reject a pending request.  Syncs leave status and balance."""
+        """Approve or reject a pending request.  Syncs leave/ticket/asset status."""
         role = current_user["role"]
-        if role not in ("manager", "hr", "admin"):
+        if role not in ("manager", "hr", "it", "admin"):
             return {"error": "Access denied."}
 
         if decision.status not in ("approved", "rejected"):
@@ -267,12 +282,14 @@ def create_app() -> FastAPI:
                 update_leave_status(req_id, decision.status)
                 leave = get_leave_by_id(req_id)
                 if leave and decision.status == "approved":
-                    # Deduct from leave balance
                     days = count_working_days(leave["start_date"], leave["end_date"])
                     leave_type = leave.get("leave_type", "casual") or "casual"
                     deduct_leave_balance(leave["user_id"], leave_type, days)
-                elif leave and decision.status == "rejected":
-                    pass  # No deduction needed for rejected
+            elif req_type == "ticket":
+                new_status = "in_progress" if decision.status == "approved" else "closed"
+                update_ticket_status(req_id, new_status)
+            elif req_type == "asset":
+                update_asset_status(req_id, decision.status)
 
         return {
             "approval_id": approval_id,
@@ -324,6 +341,58 @@ def create_app() -> FastAPI:
     def list_hr_users() -> dict:
         """Get all HR users (for leave assignment dropdown). Public endpoint."""
         return {"hr_users": get_hr_users()}
+
+    # ------------------------------------------------------------------
+    # IT Tickets API (REST endpoints)
+    # ------------------------------------------------------------------
+
+    @app.get("/api/tickets")
+    def get_tickets(current_user: dict = Depends(get_current_user)) -> dict:
+        """Get IT tickets. Employees see own; IT/admin see all."""
+        role = current_user["role"]
+        username = current_user["username"]
+        if role in ("it", "admin"):
+            tickets = get_all_tickets()
+        else:
+            tickets = list_tickets(username)
+        return {"tickets": tickets}
+
+    @app.get("/api/tickets/open")
+    def get_my_open_tickets(current_user: dict = Depends(get_current_user)) -> dict:
+        """Get current user's open tickets."""
+        username = current_user["username"]
+        tickets = get_open_tickets_for_user(username)
+        return {"tickets": tickets}
+
+    @app.post("/api/tickets/{ticket_id}/resolve")
+    def resolve_ticket_endpoint(ticket_id: int, current_user: dict = Depends(get_current_user)) -> dict:
+        """Resolve a ticket. IT team and admin only."""
+        role = current_user["role"]
+        if role not in ("it", "admin"):
+            return {"error": "Access denied. Only IT team can resolve tickets."}
+        result = resolve_ticket(ticket_id, current_user["username"])
+        success = "resolved" in result.lower()
+        return {"success": success, "message": result}
+
+    # ------------------------------------------------------------------
+    # IT Assets API
+    # ------------------------------------------------------------------
+
+    @app.get("/api/assets")
+    def get_assets(current_user: dict = Depends(get_current_user)) -> dict:
+        """Get asset requests. Employees see own; IT/admin see all."""
+        role = current_user["role"]
+        username = current_user["username"]
+        if role in ("it", "admin"):
+            assets = get_all_assets()
+        else:
+            assets = list_assets(username)
+        return {"assets": assets}
+
+    @app.get("/api/it-users")
+    def list_it_users() -> dict:
+        """Get all IT team users. Public endpoint."""
+        return {"it_users": get_it_users()}
 
     return app
 

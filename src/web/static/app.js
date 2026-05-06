@@ -32,7 +32,10 @@ const pendingTabBtn = document.getElementById("pendingTabBtn");
 const pendingBadge = document.getElementById("pendingBadge");
 const pendingList = document.getElementById("pendingList");
 const balanceList = document.getElementById("balanceList");
+const ticketsList = document.getElementById("ticketsList");
+const ticketsBadge = document.getElementById("ticketsBadge");
 const refreshPendingBtn = document.getElementById("refreshPendingBtn");
+const refreshTicketsBtn = document.getElementById("refreshTicketsBtn");
 const toastContainer = document.getElementById("toastContainer");
 
 // ---- Storage Keys --------------------------------------------------------
@@ -76,12 +79,13 @@ function init() {
   setupSidebarTabs();
   loadHrUsers();
   loadLeaveBalances();
+  loadITTickets();
 
-  // Show pending tab for HR/Manager/Admin
-  if (["hr", "manager", "admin"].includes(AUTH_ROLE)) {
+  // Show pending tab for HR/Manager/IT/Admin
+  if (["hr", "manager", "it", "admin"].includes(AUTH_ROLE)) {
     pendingTabBtn.style.display = "";
     loadPendingApprovals();
-    setInterval(loadPendingApprovals, 15000); // Auto-refresh every 15s
+    setInterval(loadPendingApprovals, 15000);
   }
 
   setInterval(updateModelStatus, 5000);
@@ -120,6 +124,7 @@ function setupSidebarTabs() {
       // Refresh data when panel is activated
       if (panel === "pending") loadPendingApprovals();
       if (panel === "balance") loadLeaveBalances();
+      if (panel === "tickets") loadITTickets();
     });
   });
 }
@@ -155,19 +160,91 @@ async function loadPendingApprovals() {
     }
 
     pendingList.innerHTML = approvals.map((a) => {
-      const leave = a.leave_details || {};
-      const leaveType = leave.leave_type || "casual";
+      // Leave approvals
+      if (a.request_type === "leave") {
+        const leave = a.leave_details || {};
+        const leaveType = leave.leave_type || "casual";
+        return `
+          <div class="pending-card" id="pending-${a.id}">
+            <div class="pending-card-header">
+              <span class="pending-card-id">#${a.id}</span>
+              <span class="pending-card-type">leave</span>
+            </div>
+            <div class="pending-card-info">
+              <strong>Employee:</strong> ${leave.user_id || "N/A"}<br>
+              <strong>Type:</strong> ${LEAVE_TYPE_LABELS[leaveType] || leaveType}<br>
+              <strong>Dates:</strong> ${leave.start_date || "?"} → ${leave.end_date || "?"}<br>
+              <strong>Reason:</strong> ${leave.reason || "Not specified"}
+            </div>
+            <div class="pending-card-actions">
+              <button class="approve-btn" onclick="handleApproval(${a.id}, 'approved')">
+                <i class="fas fa-check"></i> Approve
+              </button>
+              <button class="reject-btn" onclick="handleApproval(${a.id}, 'rejected')">
+                <i class="fas fa-times"></i> Reject
+              </button>
+            </div>
+          </div>
+        `;
+      }
+      // Ticket approvals
+      if (a.request_type === "ticket") {
+        const ticket = a.ticket_details || {};
+        return `
+          <div class="pending-card" id="pending-${a.id}" style="border-left: 3px solid #06b6d4;">
+            <div class="pending-card-header">
+              <span class="pending-card-id">#${a.id}</span>
+              <span class="pending-card-type" style="color:#06b6d4;">ticket</span>
+            </div>
+            <div class="pending-card-info">
+              <strong>User:</strong> ${ticket.user_id || "N/A"}<br>
+              <strong>Issue:</strong> ${(ticket.issue_type || "general").replace("_", " ")}<br>
+              <strong>Priority:</strong> ${ticket.priority || "medium"}<br>
+              <strong>Description:</strong> ${ticket.description || "No description"}
+            </div>
+            <div class="pending-card-actions">
+              <button class="approve-btn" onclick="handleApproval(${a.id}, 'approved')">
+                <i class="fas fa-check"></i> Assign
+              </button>
+              <button class="reject-btn" onclick="handleApproval(${a.id}, 'rejected')">
+                <i class="fas fa-times"></i> Close
+              </button>
+            </div>
+          </div>
+        `;
+      }
+      // Asset approvals
+      if (a.request_type === "asset") {
+        const asset = a.asset_details || {};
+        return `
+          <div class="pending-card" id="pending-${a.id}" style="border-left: 3px solid #f59e0b;">
+            <div class="pending-card-header">
+              <span class="pending-card-id">#${a.id}</span>
+              <span class="pending-card-type" style="color:#f59e0b;">asset</span>
+            </div>
+            <div class="pending-card-info">
+              <strong>User:</strong> ${asset.user_id || "N/A"}<br>
+              <strong>Asset:</strong> ${(asset.asset_type || "unknown").replace("_", " ")}<br>
+              <strong>Justification:</strong> ${asset.justification || "Not specified"}<br>
+              <strong>Status:</strong> ${asset.status || "pending"}
+            </div>
+            <div class="pending-card-actions">
+              <button class="approve-btn" onclick="handleApproval(${a.id}, 'approved')">
+                <i class="fas fa-check"></i> Approve
+              </button>
+              <button class="reject-btn" onclick="handleApproval(${a.id}, 'rejected')">
+                <i class="fas fa-times"></i> Reject
+              </button>
+            </div>
+          </div>
+        `;
+      }
+      // Fallback
       return `
         <div class="pending-card" id="pending-${a.id}">
           <div class="pending-card-header">
             <span class="pending-card-id">#${a.id}</span>
-            <span class="pending-card-type">${a.request_type || "leave"}</span>
-          </div>
-          <div class="pending-card-info">
-            <strong>Employee:</strong> ${leave.user_id || "N/A"}<br>
-            <strong>Type:</strong> ${LEAVE_TYPE_LABELS[leaveType] || leaveType}<br>
-            <strong>Dates:</strong> ${leave.start_date || "?"} → ${leave.end_date || "?"}<br>
-            <strong>Reason:</strong> ${leave.reason || "Not specified"}
+            <span class="pending-card-type">${a.request_type || "unknown"}</span>
           </div>
           <div class="pending-card-actions">
             <button class="approve-btn" onclick="handleApproval(${a.id}, 'approved')">
@@ -275,6 +352,91 @@ async function loadLeaveBalances() {
       .join("");
   } catch {
     balanceList.innerHTML = '<p class="pending-empty">Error loading balances</p>';
+  }
+}
+
+// ---- IT Tickets Panel ----------------------------------------------------
+
+const PRIORITY_COLORS = {
+  low: "#10b981",
+  medium: "#f59e0b",
+  high: "#ef4444",
+  critical: "#dc2626",
+};
+
+async function loadITTickets() {
+  try {
+    const res = await fetch("/api/tickets", {
+      headers: { Authorization: "Bearer " + AUTH_TOKEN },
+    });
+    if (res.status === 401) return handleAuthExpired();
+    const data = await res.json();
+
+    const tickets = data.tickets || [];
+
+    // Update badge with open count
+    const openCount = tickets.filter((t) => t.status === "open" || t.status === "in_progress").length;
+    if (openCount > 0) {
+      ticketsBadge.textContent = openCount;
+      ticketsBadge.style.display = "";
+    } else {
+      ticketsBadge.style.display = "none";
+    }
+
+    if (tickets.length === 0) {
+      ticketsList.innerHTML = '<p class="pending-empty">No IT tickets. Use chat to raise one!</p>';
+      return;
+    }
+
+    ticketsList.innerHTML = tickets.slice(0, 10).map((t) => {
+      const statusIcon = { open: "🟡", in_progress: "🔵", resolved: "🟢", closed: "⚫" }[t.status] || "⚪";
+      const priorityColor = PRIORITY_COLORS[t.priority] || "#64748b";
+      const userCol = t.user_id ? `<br><strong>User:</strong> ${t.user_id}` : "";
+      const resolveBtn = ["it", "admin"].includes(AUTH_ROLE) && t.status !== "resolved"
+        ? `<button class="approve-btn" style="margin-top:6px;font-size:10px;padding:4px 8px;" onclick="resolveTicketFromPanel(${t.id})"><i class="fas fa-check"></i> Resolve</button>`
+        : "";
+
+      return `
+        <div class="pending-card" style="border-left: 3px solid ${priorityColor};">
+          <div class="pending-card-header">
+            <span class="pending-card-id">#${t.id}</span>
+            <span class="pending-card-type" style="color:${priorityColor};">${t.priority || "medium"}</span>
+          </div>
+          <div class="pending-card-info">
+            <strong>Issue:</strong> ${(t.issue_type || "general").replace(/_/g, " ")}${userCol}<br>
+            <strong>Status:</strong> ${statusIcon} ${t.status}<br>
+            ${t.assigned_engineer ? `<strong>Assigned:</strong> ${t.assigned_engineer}<br>` : ""}
+            ${t.description ? `<strong>Desc:</strong> ${t.description.substring(0, 60)}` : ""}
+          </div>
+          ${resolveBtn}
+        </div>
+      `;
+    }).join("");
+  } catch {
+    ticketsList.innerHTML = '<p class="pending-empty">Error loading tickets</p>';
+  }
+}
+
+async function resolveTicketFromPanel(ticketId) {
+  try {
+    const res = await fetch(`/api/tickets/${ticketId}/resolve`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer " + AUTH_TOKEN,
+      },
+    });
+    if (res.status === 401) return handleAuthExpired();
+    const data = await res.json();
+    if (data.success) {
+      showToast(`Ticket #${ticketId} resolved ✅`, "success");
+      loadITTickets();
+      loadPendingApprovals();
+    } else {
+      showToast(data.message || data.error || "Failed to resolve", "error");
+    }
+  } catch (err) {
+    showToast("Error resolving ticket", "error");
   }
 }
 
@@ -624,6 +786,13 @@ async function sendMessage() {
     if (text.toLowerCase().includes("leave")) {
       loadLeaveBalances();
     }
+    // Refresh tickets after IT operations
+    if (text.toLowerCase().match(/ticket|asset|vpn|laptop|printer|monitor|keyboard|mouse|maintenance|outage/)) {
+      loadITTickets();
+      if (["hr", "manager", "it", "admin"].includes(AUTH_ROLE)) {
+        loadPendingApprovals();
+      }
+    }
   } catch (error) {
     if (typingIndicator) typingIndicator.style.display = "none";
     addMessage(`Error: ${error.message}`, "agent", "Error");
@@ -658,6 +827,10 @@ function clearChat() {
           <button class="quick-btn" data-query="Show holiday calendar">📅 Holidays</button>
           <button class="quick-btn" data-query="Show leave history">📋 Leave History</button>
           <button class="quick-btn" data-query="What is the notice period policy?">📄 Policies</button>
+          <button class="quick-btn" data-query="Raise a ticket for VPN issue">🎫 Raise IT Ticket</button>
+          <button class="quick-btn" data-query="Show my tickets">🔧 My IT Tickets</button>
+          <button class="quick-btn" data-query="Check maintenance schedule">🔧 Maintenance</button>
+          <button class="quick-btn" data-query="Request a laptop">💻 Request Asset</button>
         </div>
       </div>
     `;
@@ -718,6 +891,7 @@ function setupEventListeners() {
   if (clearBtn) clearBtn.addEventListener("click", clearChat);
   if (logoutBtn) logoutBtn.addEventListener("click", logout);
   if (refreshPendingBtn) refreshPendingBtn.addEventListener("click", loadPendingApprovals);
+  if (refreshTicketsBtn) refreshTicketsBtn.addEventListener("click", loadITTickets);
 
   messageInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {

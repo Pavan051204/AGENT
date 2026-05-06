@@ -20,7 +20,14 @@ class LeaveRequest(BaseModel):
 class TicketRequest(BaseModel):
     user_id: str
     issue_type: str
+    description: str = ""
     priority: str = "medium"
+
+
+class AssetRequest(BaseModel):
+    user_id: str
+    asset_type: str
+    justification: str = ""
 
 
 class EmailRequest(BaseModel):
@@ -37,8 +44,14 @@ async def apply_leave(req: LeaveRequest) -> dict[str, Any]:
 
 @router.post("/create_ticket")
 async def create_ticket(req: TicketRequest) -> dict[str, Any]:
-    ticket_id = database.create_ticket(req.user_id, req.issue_type, req.priority)
+    ticket_id = database.create_ticket(req.user_id, req.issue_type, req.priority, req.description)
     return {"ticket_id": ticket_id}
+
+
+@router.post("/request_asset")
+async def request_asset(req: AssetRequest) -> dict[str, Any]:
+    asset_id = database.request_asset(req.user_id, req.asset_type, req.justification)
+    return {"asset_id": asset_id, "approval_required": True}
 
 
 @router.get("/get_leave_balance")
@@ -89,15 +102,31 @@ async def get_pending_leaves(user_id: str) -> dict[str, Any]:
     return {"user_id": user_id, "pending_leaves": pending}
 
 
+@router.get("/list_tickets")
+async def list_tickets(user_id: str) -> dict[str, Any]:
+    tickets = database.list_tickets(user_id)
+    return {"user_id": user_id, "tickets": tickets}
+
+
+@router.get("/list_assets")
+async def list_assets(user_id: str) -> dict[str, Any]:
+    assets = database.list_assets(user_id)
+    return {"user_id": user_id, "assets": assets}
+
+
 @router.get("/inventory_status")
 async def inventory_status() -> dict[str, Any]:
-    """Stub for inventory status — returns static data for now."""
-    return {
-        "items": [
-            {"type": "laptop", "available": 5, "total": 20},
-            {"type": "monitor", "available": 8, "total": 15},
-            {"type": "keyboard", "available": 12, "total": 30},
-            {"type": "mouse", "available": 15, "total": 30},
-            {"type": "vpn_token", "available": 3, "total": 10},
-        ]
-    }
+    items = []
+    for key, stock in database.INVENTORY.items():
+        items.append({"type": key, "available": stock["available"], "total": stock["total"]})
+    return {"items": items}
+
+
+@router.get("/maintenance_schedule")
+async def maintenance_schedule() -> dict[str, Any]:
+    return {"maintenance": database.get_planned_maintenance()}
+
+
+@router.get("/active_outages")
+async def active_outages() -> dict[str, Any]:
+    return {"outages": database.get_active_outages()}

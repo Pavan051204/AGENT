@@ -64,9 +64,12 @@ def init_db() -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id TEXT,
             issue_type TEXT,
+            description TEXT DEFAULT '',
             priority TEXT,
             status TEXT,
-            assigned_engineer TEXT
+            assigned_engineer TEXT DEFAULT '',
+            created_at TEXT,
+            resolved_at TEXT DEFAULT ''
         )
         """
     )
@@ -100,8 +103,34 @@ def init_db() -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id TEXT,
             asset_type TEXT,
+            justification TEXT DEFAULT '',
             status TEXT,
+            assigned_to TEXT DEFAULT '',
             created_at TEXT
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS maintenance_schedule (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            system_name TEXT,
+            description TEXT,
+            start_time TEXT,
+            end_time TEXT,
+            status TEXT DEFAULT 'scheduled'
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS known_outages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            system_name TEXT,
+            description TEXT,
+            reported_at TEXT,
+            resolved_at TEXT DEFAULT '',
+            status TEXT DEFAULT 'active'
         )
         """
     )
@@ -144,6 +173,41 @@ def init_db() -> None:
             cur.execute(f"ALTER TABLE leaves ADD COLUMN {col} TEXT DEFAULT {default}")
         except Exception:
             pass  # column already exists
+    # Migrate tickets table
+    for col, default in [("description", "''"), ("created_at", "''"), ("resolved_at", "''")]:
+        try:
+            cur.execute(f"ALTER TABLE tickets ADD COLUMN {col} TEXT DEFAULT {default}")
+        except Exception:
+            pass
+    # Migrate assets table
+    for col, default in [("justification", "''"), ("assigned_to", "''")]:
+        try:
+            cur.execute(f"ALTER TABLE assets ADD COLUMN {col} TEXT DEFAULT {default}")
+        except Exception:
+            pass
+    # Seed maintenance schedule if empty
+    cur.execute("SELECT COUNT(*) FROM maintenance_schedule")
+    if cur.fetchone()[0] == 0:
+        seed_maintenance = [
+            ("VPN Gateway", "Scheduled VPN maintenance and firmware update", "2026-05-10T22:00:00", "2026-05-11T02:00:00", "scheduled"),
+            ("Email Server", "Outlook/Exchange server patching", "2026-05-15T01:00:00", "2026-05-15T05:00:00", "scheduled"),
+            ("Network Core", "Core switch upgrade — building A", "2026-05-20T23:00:00", "2026-05-21T03:00:00", "scheduled"),
+        ]
+        cur.executemany(
+            "INSERT INTO maintenance_schedule (system_name, description, start_time, end_time, status) VALUES (?, ?, ?, ?, ?)",
+            seed_maintenance,
+        )
+    # Seed known outages if empty
+    cur.execute("SELECT COUNT(*) FROM known_outages")
+    if cur.fetchone()[0] == 0:
+        seed_outages = [
+            ("Printer Floor 3", "Printer on floor 3 is offline — paper jam, technician dispatched", _now(), "", "active"),
+            ("Wi-Fi Zone B", "Intermittent Wi-Fi in Zone B conference rooms — under investigation", _now(), "", "active"),
+        ]
+        cur.executemany(
+            "INSERT INTO known_outages (system_name, description, reported_at, resolved_at, status) VALUES (?, ?, ?, ?, ?)",
+            seed_outages,
+        )
     conn.commit()
     conn.close()
 
@@ -389,25 +453,27 @@ def get_approvals_for_hr(hr_username: str) -> list[dict]:
     ]
 
 
-def create_ticket(user_id: str, issue_type: str, priority: str) -> int:
+def create_ticket(user_id: str, issue_type: str, priority: str, description: str = "") -> int:
     conn = _get_conn()
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO tickets (user_id, issue_type, priority, status, assigned_engineer) VALUES (?, ?, ?, ?, ?)",
-        (user_id, issue_type, priority, "open", ""),
+        "INSERT INTO tickets (user_id, issue_type, description, priority, status, assigned_engineer, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (user_id, issue_type, description, priority, "open", "", _now()),
     )
     ticket_id = cur.lastrowid
     conn.commit()
     conn.close()
+    # Create approval record for ticket visibility in sidebar
+    create_approval("ticket", ticket_id, approver_id="")
     return ticket_id
 
 
-def request_asset(user_id: str, asset_type: str) -> int:
+def request_asset(user_id: str, asset_type: str, justification: str = "") -> int:
     conn = _get_conn()
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO assets (user_id, asset_type, status, created_at) VALUES (?, ?, ?, ?)",
-        (user_id, asset_type, "pending", _now()),
+        "INSERT INTO assets (user_id, asset_type, justification, status, assigned_to, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (user_id, asset_type, justification, "pending", "", _now()),
     )
     asset_id = cur.lastrowid
     conn.commit()
@@ -701,6 +767,264 @@ def _leave_days(start_date: str, end_date: str) -> int:
     start = datetime.fromisoformat(start_date).date()
     end = datetime.fromisoformat(end_date).date()
     return (end - start).days + 1
+
+
+# ---------------------------------------------------------------------------
+# IT Ticket management — enterprise functions
+# ---------------------------------------------------------------------------
+
+def get_ticket_by_id(ticket_id: int) -> dict | None:
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, user_id, issue_type, description, priority, status, assigned_engineer, created_at, resolved_at FROM tickets WHERE id = ?",
+        (ticket_id,),
+    )
+    row = cur.fetchone()
+    conn.close()
+    if row is None:
+        return None
+    return {
+        "id": row[0], "user_id": row[1], "issue_type": row[2],
+        "description": row[3] or "", "priority": row[4], "status": row[5],
+        "assigned_engineer": row[6] or "", "created_at": row[7] or "",
+        "resolved_at": row[8] or "",
+    }
+
+
+def list_tickets(user_id: str) -> list[dict]:
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, issue_type, description, priority, status, assigned_engineer, created_at FROM tickets WHERE user_id = ? ORDER BY id DESC",
+        (user_id,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [
+        {"id": r[0], "issue_type": r[1], "description": r[2] or "", "priority": r[3],
+         "status": r[4], "assigned_engineer": r[5] or "", "created_at": r[6] or ""}
+        for r in rows
+    ]
+
+
+def get_all_tickets(status_filter: str | None = None) -> list[dict]:
+    conn = _get_conn()
+    cur = conn.cursor()
+    if status_filter:
+        cur.execute(
+            "SELECT id, user_id, issue_type, description, priority, status, assigned_engineer, created_at FROM tickets WHERE status = ? ORDER BY id DESC",
+            (status_filter,),
+        )
+    else:
+        cur.execute("SELECT id, user_id, issue_type, description, priority, status, assigned_engineer, created_at FROM tickets ORDER BY id DESC")
+    rows = cur.fetchall()
+    conn.close()
+    return [
+        {"id": r[0], "user_id": r[1], "issue_type": r[2], "description": r[3] or "",
+         "priority": r[4], "status": r[5], "assigned_engineer": r[6] or "", "created_at": r[7] or ""}
+        for r in rows
+    ]
+
+
+def check_duplicate_tickets(user_id: str, issue_type: str) -> list[dict]:
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, issue_type, description, status, created_at FROM tickets WHERE user_id = ? AND LOWER(issue_type) = LOWER(?) AND status IN ('open', 'in_progress')",
+        (user_id, issue_type),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [
+        {"id": r[0], "issue_type": r[1], "description": r[2] or "", "status": r[3], "created_at": r[4] or ""}
+        for r in rows
+    ]
+
+
+def assign_ticket(ticket_id: int, engineer: str) -> str:
+    ticket = get_ticket_by_id(ticket_id)
+    if not ticket:
+        return "Ticket not found."
+    if ticket["status"] == "resolved":
+        return "Cannot assign a resolved ticket."
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE tickets SET assigned_engineer = ?, status = 'in_progress' WHERE id = ?",
+        (engineer, ticket_id),
+    )
+    conn.commit()
+    conn.close()
+    return f"Ticket #{ticket_id} assigned to {engineer}."
+
+
+def resolve_ticket(ticket_id: int, resolved_by: str) -> str:
+    ticket = get_ticket_by_id(ticket_id)
+    if not ticket:
+        return "Ticket not found."
+    if ticket["status"] == "resolved":
+        return "Ticket is already resolved."
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE tickets SET status = 'resolved', resolved_at = ?, assigned_engineer = CASE WHEN assigned_engineer = '' THEN ? ELSE assigned_engineer END WHERE id = ?",
+        (_now(), resolved_by, ticket_id),
+    )
+    # Also update any related approval
+    cur.execute(
+        "UPDATE approvals SET status = 'resolved' WHERE request_type = 'ticket' AND request_id = ? AND status = 'pending'",
+        (ticket_id,),
+    )
+    conn.commit()
+    conn.close()
+    return f"Ticket #{ticket_id} has been resolved."
+
+
+def update_ticket_status(ticket_id: int, status: str) -> None:
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("UPDATE tickets SET status = ? WHERE id = ?", (status, ticket_id))
+    conn.commit()
+    conn.close()
+
+
+def get_open_tickets_for_user(user_id: str) -> list[dict]:
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, issue_type, description, priority, status, created_at FROM tickets WHERE user_id = ? AND status IN ('open', 'in_progress') ORDER BY id DESC",
+        (user_id,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [
+        {"id": r[0], "issue_type": r[1], "description": r[2] or "", "priority": r[3], "status": r[4], "created_at": r[5] or ""}
+        for r in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Maintenance schedule & known outages
+# ---------------------------------------------------------------------------
+
+def get_planned_maintenance() -> list[dict]:
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT id, system_name, description, start_time, end_time, status FROM maintenance_schedule WHERE status = 'scheduled' ORDER BY start_time")
+    rows = cur.fetchall()
+    conn.close()
+    return [
+        {"id": r[0], "system_name": r[1], "description": r[2], "start_time": r[3], "end_time": r[4], "status": r[5]}
+        for r in rows
+    ]
+
+
+def get_active_outages() -> list[dict]:
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT id, system_name, description, reported_at, status FROM known_outages WHERE status = 'active' ORDER BY reported_at DESC")
+    rows = cur.fetchall()
+    conn.close()
+    return [
+        {"id": r[0], "system_name": r[1], "description": r[2], "reported_at": r[3], "status": r[4]}
+        for r in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Asset management — enterprise functions
+# ---------------------------------------------------------------------------
+
+def get_asset_by_id(asset_id: int) -> dict | None:
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, user_id, asset_type, justification, status, assigned_to, created_at FROM assets WHERE id = ?",
+        (asset_id,),
+    )
+    row = cur.fetchone()
+    conn.close()
+    if row is None:
+        return None
+    return {
+        "id": row[0], "user_id": row[1], "asset_type": row[2],
+        "justification": row[3] or "", "status": row[4],
+        "assigned_to": row[5] or "", "created_at": row[6] or "",
+    }
+
+
+def list_assets(user_id: str) -> list[dict]:
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT id, asset_type, justification, status, created_at FROM assets WHERE user_id = ? ORDER BY id DESC", (user_id,))
+    rows = cur.fetchall()
+    conn.close()
+    return [
+        {"id": r[0], "asset_type": r[1], "justification": r[2] or "", "status": r[3], "created_at": r[4] or ""}
+        for r in rows
+    ]
+
+
+def get_all_assets() -> list[dict]:
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT id, user_id, asset_type, justification, status, assigned_to, created_at FROM assets ORDER BY id DESC")
+    rows = cur.fetchall()
+    conn.close()
+    return [
+        {"id": r[0], "user_id": r[1], "asset_type": r[2], "justification": r[3] or "",
+         "status": r[4], "assigned_to": r[5] or "", "created_at": r[6] or ""}
+        for r in rows
+    ]
+
+
+def update_asset_status(asset_id: int, status: str) -> None:
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("UPDATE assets SET status = ? WHERE id = ?", (status, asset_id))
+    conn.commit()
+    conn.close()
+
+
+# Inventory stock levels (static enterprise data)
+INVENTORY = {
+    "laptop": {"available": 5, "total": 20},
+    "monitor": {"available": 8, "total": 15},
+    "keyboard": {"available": 12, "total": 30},
+    "mouse": {"available": 15, "total": 30},
+    "vpn_token": {"available": 3, "total": 10},
+    "software_license": {"available": 7, "total": 25},
+}
+
+
+def check_inventory(asset_type: str) -> dict:
+    key = asset_type.lower().replace(" ", "_")
+    return INVENTORY.get(key, {"available": 0, "total": 0})
+
+
+def get_it_users() -> list[dict]:
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT id, username, role FROM users WHERE role = 'it'")
+    rows = cur.fetchall()
+    conn.close()
+    return [{"id": r[0], "username": r[1], "role": r[2]} for r in rows]
+
+
+def get_it_pending_approvals() -> list[dict]:
+    """Get pending approvals for ticket and asset request types."""
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, request_type, request_id, status, approver_id, created_at FROM approvals WHERE status = 'pending' AND request_type IN ('ticket', 'asset') ORDER BY id DESC"
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [
+        {"id": r[0], "request_type": r[1], "request_id": r[2], "status": r[3], "approver_id": r[4], "created_at": r[5]}
+        for r in rows
+    ]
 
 
 def _now() -> str:

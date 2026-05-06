@@ -33,6 +33,7 @@ _HR_LEAVE_KEYWORDS = [
     "leave", "apply leave", "cancel leave", "leave balance", "leave history",
     "pending leave", "leave status", "approval status", "holiday", "calendar",
     "day off", "time off", "vacation", "sick leave", "casual leave",
+    "approvals", "pending approvals", "my approvals", "approve", "reject",
 ]
 
 _HR_POLICY_KEYWORDS = [
@@ -46,13 +47,17 @@ _IT_KEYWORDS = [
     "ticket", "laptop", "vpn", "printer", "outlook", "email issue",
     "network", "software install", "it support", "it help", "asset",
     "monitor", "keyboard", "mouse", "license", "password reset",
-    "access request", "hardware",
+    "access request", "hardware", "it request", "raise ticket",
+    "create ticket", "my tickets", "it ticket", "assign ticket",
+    "resolve ticket", "maintenance", "outage", "inventory",
+    "asset request", "vpn token", "software license",
+    "it issue", "it problem", "tech support",
 ]
 
 _FINANCE_KEYWORDS = [
     "payslip", "salary", "reimbursement", "reimburse", "claim",
     "tax", "pf", "provident fund", "ctc", "investment", "declaration",
-    "payroll", "expense", "receipt",
+    "payroll", "expense", "receipt", "finance request",
 ]
 
 
@@ -71,6 +76,18 @@ def _classify_intent(query: str) -> str:
         "it": 0,
         "finance": 0,
     }
+
+    # Direct match for common HR requests
+    if any(k in q for k in [
+        "pending approvals", "show approvals", "my approvals",
+        "pending request", "approve it", "reject it",
+        "apply leave", "take leave", "want leave", "need leave",
+        "leave balance", "leave history", "cancel leave",
+        "sick leave", "casual leave", "earned leave", "comp off",
+        "i am sick", "i am ill", "feeling sick", "not feeling well",
+        "feverish", "fever", "unwell",
+    ]):
+        return "hr-leave"
 
     for kw in _HR_LEAVE_KEYWORDS:
         if kw in q:
@@ -159,6 +176,7 @@ def _hr_agent(state: GraphState) -> GraphState:
 def _rag_agent(state: GraphState) -> GraphState:
     """RAG Agent node — policy questions and general queries."""
     agent = AGENT_REGISTRY.get("rag")
+    state["chat_history"] = memory_manager.get_context(state["session_id"])
     result = agent.handle(state)
     state["response"] = result.response
     state["approval_required"] = result.approval_required
@@ -168,12 +186,13 @@ def _rag_agent(state: GraphState) -> GraphState:
 
 
 def _it_agent(state: GraphState) -> GraphState:
-    """IT Agent node — ticket and asset management."""
+    """IT Agent node — ticket, asset, and IT operations management."""
     agent = AGENT_REGISTRY.get("it")
+    state["chat_history"] = memory_manager.get_context(state["session_id"])
     result = agent.handle(state)
     state["response"] = result.response
     state["approval_required"] = result.approval_required
-    state["model_used"] = "it-agent"
+    state["model_used"] = getattr(agent, "model", "it-agent")
     return state
 
 
