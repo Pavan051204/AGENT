@@ -378,7 +378,7 @@ def get_approvals_for_hr(hr_username: str) -> list[dict]:
         """SELECT a.id, a.request_type, a.request_id, a.status, a.created_at
            FROM approvals a
            JOIN leaves l ON a.request_id = l.id AND a.request_type = 'leave'
-           WHERE a.status = 'pending' AND l.assigned_hr = ?""",
+           WHERE a.status = 'pending' AND LOWER(l.assigned_hr) = LOWER(?)""",
         (hr_username,),
     )
     rows = cur.fetchall()

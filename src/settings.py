@@ -27,7 +27,7 @@ class AppConfig:
 
 def get_config() -> AppConfig:
     return AppConfig(
-        app_name=os.getenv("APP_NAME", "Enterprise Multi-Agent Copilot"),
+        app_name=os.getenv("APP_NAME", "Novi Pilot"),
         app_env=os.getenv("APP_ENV", "dev"),
         gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
         gemini_model=os.getenv("GEMINI_MODEL", "auto"),

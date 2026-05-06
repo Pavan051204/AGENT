@@ -651,7 +651,7 @@ function clearChat() {
     chatLog.innerHTML = `
       <div class="welcome-message">
         <div class="welcome-icon"><i class="fas fa-brain"></i></div>
-        <h2>Multi-Agent AI Assistant</h2>
+        <h2>Novi Pilot</h2>
         <p>Ask about company policies, apply for leave, raise IT tickets, or check finance queries.</p>
         <div class="quick-actions" id="quickActions">
           <button class="quick-btn" data-query="Check leave balance">📊 Leave Balance</button>

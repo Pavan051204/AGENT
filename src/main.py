@@ -298,19 +298,21 @@ def create_app() -> FastAPI:
     @app.get("/api/leaves/pending")
     def get_my_pending_leaves(current_user: dict = Depends(get_current_user)) -> dict:
         """Get current user's pending leave requests."""
-        pending = get_pending_leaves(current_user["user_id"])
+        username = current_user["username"]
+        pending = get_pending_leaves(username)
         return {"pending_leaves": pending}
 
     @app.get("/api/leaves/balance")
     def get_my_leave_balance(current_user: dict = Depends(get_current_user)) -> dict:
         """Get current user's leave balance (all types)."""
-        balance = get_leave_balance(current_user["user_id"])
-        return {"user_id": current_user["user_id"], "balance": balance}
+        username = current_user["username"]
+        balance = get_leave_balance(username)
+        return {"user_id": username, "balance": balance}
 
     @app.post("/api/leaves/{leave_id}/cancel")
     def cancel_my_leave(leave_id: int, current_user: dict = Depends(get_current_user)) -> dict:
         """Cancel a pending leave request."""
-        result = cancel_leave(leave_id, current_user["user_id"])
+        result = cancel_leave(leave_id, current_user["username"])
         success = "cancelled" in result.lower()
         return {"success": success, "message": result}
 

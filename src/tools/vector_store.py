@@ -27,8 +27,7 @@ class VectorStore:
         self._vocab: dict[str, int] = {}
         self._idf: dict[str, float] = {}
         self._tfidf_matrix: list[dict[str, float]] = []
-
-        self.load_index()
+        self._loaded = False
 
     # ------------------------------------------------------------------ #
     #  Text helpers
@@ -104,12 +103,14 @@ class VectorStore:
 
     def add_documents(self, docs: list[Document]) -> None:
         """Add documents and rebuild the TF-IDF index."""
+        self.load_index()
         self.documents.extend(docs)
         self._build_index()
         self.save_index()
 
     def query(self, query_text: str, k: int = 5, role: str | None = None) -> list[Document]:
         """Query for relevant documents using TF-IDF cosine similarity."""
+        self.load_index()
         if not self.documents:
             return []
 
@@ -163,6 +164,8 @@ class VectorStore:
 
     def load_index(self) -> None:
         """Load documents from disk and rebuild TF-IDF index."""
+        if getattr(self, "_loaded", False):
+            return
         if self.index_file.exists():
             data = json.loads(self.index_file.read_text())
             self.documents = [
@@ -174,3 +177,4 @@ class VectorStore:
             ]
             self._build_index()
             print(f"Loaded {len(self.documents)} document chunks into TF-IDF index.")
+        self._loaded = True

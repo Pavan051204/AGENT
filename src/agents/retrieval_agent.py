@@ -29,22 +29,22 @@ class RAGAgent(BaseAgent):
         # Retrieve relevant documents via local TF-IDF
         results = self.vector_store.query(query, k=5, role=role)
 
-        if not results:
-            return AgentResult(response="No relevant documents found in policy database.")
-
         # Build context from retrieved documents
-        context = "\n\n".join(
-            [f"**From {doc.metadata.get('source', 'Unknown')}:**\n{doc.content}" for doc in results]
-        )
+        if not results:
+            context = "No specific policy documents found for this query."
+        else:
+            context = "\n\n".join(
+                [f"**From {doc.metadata.get('source', 'Unknown')}:**\n{doc.content}" for doc in results]
+            )
 
-        prompt = f"""You are a helpful company policy assistant. Based on the policy documents provided, answer the user's question concisely and accurately.
+        prompt = f"""You are Novi Pilot. You assist employees with HR, IT, Finance inquiries, and general company policies.
+If the user says a conversational greeting (like "hi", "hello"), respond politely and ask how you can help.
+If the user asks a policy question, answer based ONLY on the provided policy documents below. If the answer is not in the documents, explicitly say "I couldn't find that in the company policies."
 
 COMPANY POLICIES:
 {context}
 
-USER QUESTION: {query}
-
-Please provide a clear, direct answer based on the policies. If the information is not in the provided documents, say so explicitly."""
+USER QUESTION: {query}"""
 
         # Use Groq
         if self.groq_client:

@@ -1,6 +1,9 @@
 import re
 from datetime import date, timedelta
 
+import json
+from groq import Groq
+from src.settings import get_config
 from src.agents.agent_base import AgentResult, BaseAgent
 from src.tools import database
 
@@ -25,37 +28,50 @@ class HRAgent(BaseAgent):
 
     name = "hr"
 
+    def __init__(self):
+        super().__init__()
+        config = get_config()
+        self.groq_client = Groq(api_key=config.groq_api_key) if config.groq_api_key else None
+        self.groq_model = config.groq_model
+        self.model = self.groq_model
+
     def handle(self, state: dict) -> AgentResult:
-        query = state.get("query", "").lower()
+        query = state.get("query", "")
         user_id = state.get("user_id", "")
         role = state.get("role", "")
+        chat_history = state.get("chat_history", [])
 
+        # If LLM is available, use it to extract intent and entities with memory
+        parsed = self._parse_with_llm(query, chat_history)
+
+        intent = parsed.get("intent", "unknown")
+        
         # ── Apply Leave ───────────────────────────────────────────────
-        if "apply" in query and "leave" in query:
-            return self._apply_leave(query, user_id)
+        if intent == "apply_leave":
+            return self._apply_leave_parsed(parsed, user_id)
 
         # ── Cancel Leave ──────────────────────────────────────────────
-        if "cancel" in query and "leave" in query:
+        if intent == "cancel_leave":
             return self._cancel_leave(query, user_id)
 
         # ── Leave Balance ─────────────────────────────────────────────
-        if "balance" in query:
+        if intent == "leave_balance":
             return self._show_balance(user_id)
 
         # ── Leave History ─────────────────────────────────────────────
-        if "history" in query or ("list" in query and "leave" in query) or "my leaves" in query:
+        if intent == "leave_history":
             return self._leave_history(user_id, role)
 
         # ── Pending Requests ──────────────────────────────────────────
-        if "pending" in query:
+        if intent == "pending_leaves":
             return self._pending_leaves(user_id, role)
 
         # ── Approval Status ───────────────────────────────────────────
-        if "approval" in query or "status" in query:
+        if intent == "approval_status":
             return self._approval_status(query, user_id)
 
         # ── Holiday Calendar ──────────────────────────────────────────
-        if "holiday" in query or "calendar" in query:
+        if intent == "holiday_calendar":
             return self._holiday_calendar()
 
         # ── Fallback ──────────────────────────────────────────────────
@@ -79,16 +95,71 @@ class HRAgent(BaseAgent):
     #  Private helpers
     # ──────────────────────────────────────────────────────────────────
 
-    def _apply_leave(self, query: str, user_id: str) -> AgentResult:
-        dates = _extract_dates(query)
-        if len(dates) < 2:
+    def _parse_with_llm(self, query: str, chat_history: list) -> dict:
+        """Use LLM to extract intent and entities (dates, reason, hr) from context."""
+        if not self.groq_client:
+            # Fallback to simple matching if no LLM
+            intent = "unknown"
+            q = query.lower()
+            if "apply" in q and "leave" in q: intent = "apply_leave"
+            elif "cancel" in q and "leave" in q: intent = "cancel_leave"
+            elif "balance" in q: intent = "leave_balance"
+            elif "history" in q or "my leaves" in q: intent = "leave_history"
+            elif "pending" in q: intent = "pending_leaves"
+            elif "approval" in q or "status" in q: intent = "approval_status"
+            elif "holiday" in q or "calendar" in q: intent = "holiday_calendar"
+            
+            return {
+                "intent": intent,
+                "start_date": _extract_dates(query)[0] if _extract_dates(query) else None,
+                "end_date": _extract_dates(query)[1] if len(_extract_dates(query)) > 1 else None,
+                "leave_type": _extract_leave_type(query),
+                "reason": _extract_reason(query),
+                "hr": _extract_hr(query)
+            }
+
+        sys_prompt = f"""You are an HR intent extraction system. 
+You must analyze the user's latest query, considering the chat history, and output ONLY valid JSON.
+Today's date is {date.today().isoformat()}.
+
+Extract these fields:
+- intent: strictly one of ["apply_leave", "cancel_leave", "leave_balance", "leave_history", "pending_leaves", "approval_status", "holiday_calendar", "unknown"]
+- start_date: YYYY-MM-DD (if mentioned for leave application)
+- end_date: YYYY-MM-DD (if mentioned. if only one day mentioned, end_date = start_date)
+- leave_type: one of ["casual", "sick", "earned", "comp_off"]
+- reason: brief string reason for leave
+- hr: assigned HR username if mentioned
+
+Return ONLY a JSON object. No markdown, no intro/outro text."""
+
+        history_text = "\n".join([f"{msg['role']}: {msg['query']}" for msg in chat_history[-3:]])
+        user_prompt = f"Chat History:\n{history_text}\n\nLatest Query: {query}"
+
+        try:
+            res = self.groq_client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": sys_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                model=self.groq_model,
+                temperature=0.1,
+                response_format={"type": "json_object"}
+            )
+            return json.loads(res.choices[0].message.content)
+        except Exception as e:
+            print("LLM Parsing Error:", e)
+            return {"intent": "unknown"}
+
+    def _apply_leave_parsed(self, parsed: dict, user_id: str) -> AgentResult:
+        start_date = parsed.get("start_date")
+        end_date = parsed.get("end_date")
+        leave_type = parsed.get("leave_type", "casual")
+        assigned_hr = parsed.get("hr", "")
+        reason = parsed.get("reason", "")
+
+        if not start_date or not end_date:
             # Return an adaptive card for leave application form
             return self._render_leave_form(user_id)
-
-        start_date, end_date = dates[0], dates[1]
-        leave_type = _extract_leave_type(query)
-        assigned_hr = _extract_hr(query)
-        reason = _extract_reason(query)
 
         # ── Validate dates ────────────────────────────────────────
         validation_error = database.validate_leave_dates(start_date, end_date)

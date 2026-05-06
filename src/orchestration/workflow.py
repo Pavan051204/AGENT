@@ -22,6 +22,7 @@ class GraphState(TypedDict, total=False):
     model_used: str
     model_preference: str
     intent: str
+    chat_history: list
 
 
 # ---------------------------------------------------------------------------
@@ -147,10 +148,11 @@ def _route_agent(state: GraphState) -> str:
 def _hr_agent(state: GraphState) -> GraphState:
     """HR Agent node — handles leave management."""
     agent = AGENT_REGISTRY.get("hr")
+    state["chat_history"] = memory_manager.get_context(state["session_id"])
     result = agent.handle(state)
     state["response"] = result.response
     state["approval_required"] = result.approval_required
-    state["model_used"] = "hr-agent (rule-based)"
+    state["model_used"] = getattr(agent, "model", "hr-agent")
     return state
 
 
