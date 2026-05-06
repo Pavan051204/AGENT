@@ -18,7 +18,7 @@ This project implements an enterprise policy assistant using Gemini API with PDF
 
 2. **Set up environment variables** (`.env` file is already configured):
    ```
-   GEMINI_API_KEY=AIzaSyBzNrVRjfq81EnX59bHZxeGAxSYE7Bsm0Y
+   GEMINI_API_KEY=[GCP_API_KEY]
    GEMINI_MODEL=auto
    PDF_DOCS_PATH=./docs
    ```
