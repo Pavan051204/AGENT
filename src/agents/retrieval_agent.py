@@ -26,6 +26,7 @@ class RAGAgent(BaseAgent):
         query = state.get("query", "")
         role = state.get("role", "")
         intent = state.get("intent", "")
+        chat_history = state.get("chat_history", [])
 
         # Retrieve relevant documents via local TF-IDF
         results = self.vector_store.query(query, k=5, role=role)
@@ -51,10 +52,22 @@ class RAGAgent(BaseAgent):
                 [f"**From {doc.metadata.get('source', 'Unknown')}:**\n{doc.content}" for doc in results]
             )
 
+        # Build conversation history for context
+        history_text = ""
+        if chat_history:
+            history_text = "CONVERSATION HISTORY:\n"
+            for msg in chat_history[-3:]:  # Include last 3 messages for context
+                if msg.get("query"):
+                    history_text += f"User: {msg['query']}\n"
+                if msg.get("response"):
+                    history_text += f"Assistant: {msg['response']}\n"
+            history_text += "\n"
+
         if web_search_used:
             prompt = f"""You are Novi Pilot. You assist employees with HR, IT, Finance inquiries.
 I couldn't find the answer in our internal company PDFs, so I searched the public web. Answer the user's question based on these web search results. Make sure to mention that this information is from the public internet, not an internal policy.
 
+{history_text}
 WEB SEARCH RESULTS:
 {context}
 
@@ -64,7 +77,9 @@ USER QUESTION: {query}"""
 If the user says a conversational greeting (like "hi", "hello"), respond politely and ask how you can help.
 If the user asks a policy question, answer based ONLY on the provided policy documents below. If the answer is not in the documents, explicitly say "I couldn't find that in the company policies."
 If the user asks a general knowledge question (e.g., how to make biryani, sports, history), you may answer it using your general knowledge or the context provided, but mention that this is not a company policy.
+Remember the context from our conversation history to provide personalized responses.
 
+{history_text}
 COMPANY POLICIES:
 {context}
 
@@ -75,7 +90,7 @@ USER QUESTION: {query}"""
             try:
                 chat_completion = self.groq_client.chat.completions.create(
                     messages=[
-                        {"role": "system", "content": "You are a helpful company policy assistant."},
+                        {"role": "system", "content": "You are a helpful company policy assistant. Remember context from previous messages in this conversation."},
                         {"role": "user", "content": prompt}
                     ],
                     model=self.groq_model,

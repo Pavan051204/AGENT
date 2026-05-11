@@ -9,6 +9,8 @@ class FinanceAgent(BaseAgent):
 
     def handle(self, state: dict) -> AgentResult:
         query = state.get("query", "").lower()
+        chat_history = state.get("chat_history", [])
+        
         if "payslip" in query:
             return AgentResult(response="Payslip request recorded. Please specify month if needed.")
 

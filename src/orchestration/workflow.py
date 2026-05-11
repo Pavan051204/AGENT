@@ -202,6 +202,7 @@ def _it_agent(state: GraphState) -> GraphState:
 def _finance_agent(state: GraphState) -> GraphState:
     """Finance Agent node — payslip, reimbursement, tax queries."""
     agent = AGENT_REGISTRY.get("finance")
+    state["chat_history"] = memory_manager.get_context(state["session_id"])
     result = agent.handle(state)
     state["response"] = result.response
     state["approval_required"] = result.approval_required
