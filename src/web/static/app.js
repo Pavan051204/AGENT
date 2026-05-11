@@ -81,11 +81,65 @@ function init() {
   loadLeaveBalances();
   loadITTickets();
 
-  // Show pending tab for HR/Manager/IT/Admin
-  if (["hr", "manager", "it", "admin"].includes(AUTH_ROLE)) {
+  // Show pending tab for HR/Manager ONLY
+  if (["hr", "manager"].includes(AUTH_ROLE)) {
     pendingTabBtn.style.display = "";
     loadPendingApprovals();
     setInterval(loadPendingApprovals, 15000);
+  }
+
+  // RBAC for Sidebar Tabs and Title
+  const pendingTitle = document.querySelector("#pendingPanel .config-title");
+  if (AUTH_ROLE === "it" || AUTH_ROLE === "admin") {
+    // Hide HR-specific quick actions for IT/Admin to keep UI clean
+    document.querySelectorAll('.quick-btn').forEach(btn => {
+      if (btn.dataset.query.includes("leave") || btn.dataset.query.includes("holiday") || btn.dataset.query.includes("policy")) {
+        btn.style.display = 'none';
+      }
+    });
+    // Hide Leaves tab if they only want tickets box
+    const balanceTabBtn = document.getElementById("balanceTabBtn");
+    if (balanceTabBtn) balanceTabBtn.style.display = 'none';
+    
+    // Make Tickets tab active by default
+    const ticketsTabBtn = document.getElementById("ticketsTabBtn");
+    const ticketsPanel = document.getElementById("ticketsPanel");
+    const settingsTabBtn = document.getElementById("settingsTabBtn");
+    const settingsPanel = document.getElementById("settingsPanel");
+    
+    if (ticketsTabBtn && ticketsPanel) {
+      settingsTabBtn?.classList.remove("active");
+      settingsPanel?.classList.remove("active");
+      ticketsTabBtn.classList.add("active");
+      ticketsPanel.classList.add("active");
+    }
+
+  } else if (AUTH_ROLE === "hr") {
+    if (pendingTitle) pendingTitle.innerHTML = '<i class="fas fa-calendar-check"></i> Pending Leaves';
+    // Hide IT-specific quick actions for HR
+    document.querySelectorAll('.quick-btn').forEach(btn => {
+      if (btn.dataset.query.includes("ticket") || btn.dataset.query.includes("laptop") || btn.dataset.query.includes("maintenance")) {
+        btn.style.display = 'none';
+      }
+    });
+    
+    // Hide Leaves and Tickets tabs
+    const balanceTabBtn = document.getElementById("balanceTabBtn");
+    const ticketsTabBtn = document.getElementById("ticketsTabBtn");
+    if (balanceTabBtn) balanceTabBtn.style.display = 'none';
+    if (ticketsTabBtn) ticketsTabBtn.style.display = 'none';
+    
+    // Make Pending tab active by default
+    const pendingPanel = document.getElementById("pendingPanel");
+    const settingsTabBtn = document.getElementById("settingsTabBtn");
+    const settingsPanel = document.getElementById("settingsPanel");
+    
+    if (pendingTabBtn && pendingPanel) {
+      settingsTabBtn?.classList.remove("active");
+      settingsPanel?.classList.remove("active");
+      pendingTabBtn.classList.add("active");
+      pendingPanel.classList.add("active");
+    }
   }
 
   setInterval(updateModelStatus, 5000);
@@ -286,8 +340,13 @@ async function handleApproval(approvalId, status) {
       return;
     }
 
+    let actionText = status === "approved" ? "approved ✅" : "rejected ❌";
+    if (card?.querySelector('.pending-card-type')?.textContent === "ticket" && status === "approved") {
+      actionText = "assigned ✅";
+    }
+
     showToast(
-      `Leave ${status === "approved" ? "approved ✅" : "rejected ❌"} by ${data.approved_by}`,
+      `Request ${actionText} by ${data.approved_by}`,
       status === "approved" ? "success" : "error"
     );
 
@@ -592,6 +651,9 @@ function renderAdaptiveCard(toolCall) {
   if (card_type === "hr_picker") {
     return buildHrPickerCard(data);
   }
+  if (card_type === "ticket_form") {
+    return buildTicketFormCard(data);
+  }
   if (card_type === "show_pending_tab") {
     // Auto-switch to pending tab
     if (pendingTabBtn) pendingTabBtn.click();
@@ -680,6 +742,43 @@ function buildHrPickerCard(data) {
   return card;
 }
 
+function buildTicketFormCard(data) {
+  const card = document.createElement("div");
+  card.className = "adaptive-card";
+
+  const issueOptions = (data.issue_types || ["laptop", "vpn", "email", "printer", "network", "software", "password_reset", "general"])
+    .map((t) => `<option value="${t}">${t.replace("_", " ").toUpperCase()}</option>`)
+    .join("");
+
+  card.innerHTML = `
+    <div class="adaptive-card-title">
+      <i class="fas fa-ticket-alt"></i> Raise IT Ticket
+    </div>
+    <div class="form-group">
+      <label>Issue Type</label>
+      <select id="card-issue-type">${issueOptions}</select>
+    </div>
+    <div class="form-group">
+      <label>Priority</label>
+      <select id="card-priority">
+        <option value="low">Low</option>
+        <option value="medium" selected>Medium</option>
+        <option value="high">High</option>
+        <option value="critical">Critical</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Description</label>
+      <input type="text" id="card-ticket-description" placeholder="Brief description of the problem" />
+    </div>
+    <button class="adaptive-card-submit" onclick="submitTicketCard()">
+      <i class="fas fa-paper-plane"></i> Submit Ticket
+    </button>
+  `;
+
+  return card;
+}
+
 function submitLeaveCard() {
   const leaveType = document.getElementById("card-leave-type")?.value || "casual";
   const startDate = document.getElementById("card-start-date")?.value;
@@ -711,6 +810,21 @@ function submitHrPicker(leaveType, startDate, endDate, reason) {
   if (reason) msg += ` for ${reason}`;
   msg += ` hr ${hr}`;
 
+  messageInput.value = msg;
+  sendMessage();
+}
+
+function submitTicketCard() {
+  const issueType = document.getElementById("card-issue-type")?.value || "general";
+  const priority = document.getElementById("card-priority")?.value || "medium";
+  const description = document.getElementById("card-ticket-description")?.value || "";
+
+  if (!description) {
+    showToast("Please provide a description", "error");
+    return;
+  }
+
+  const msg = `Raise IT ticket for ${issueType} with ${priority} priority: ${description}`;
   messageInput.value = msg;
   sendMessage();
 }

@@ -69,8 +69,7 @@ class ITAgent(BaseAgent):
                                            "description": "Category of the issue"},
                             "description": {"type": "string", "description": "Brief description of the problem"},
                             "priority": {"type": "string", "enum": ["low", "medium", "high", "critical"], "description": "Priority level"}
-                        },
-                        "required": ["issue_type"]
+                        }
                     }
                 }
             },
@@ -94,7 +93,7 @@ class ITAgent(BaseAgent):
                 "function": {
                     "name": "view_my_tickets",
                     "description": "View the user's IT support tickets.",
-                    "parameters": {"type": "object", "properties": {}}
+                    "parameters": {"type": "object", "properties": {"dummy": {"type": "string", "description": "leave empty"}}}
                 }
             },
             {
@@ -102,7 +101,7 @@ class ITAgent(BaseAgent):
                 "function": {
                     "name": "view_all_tickets",
                     "description": "View all IT tickets across the organization. Only for IT team / admin.",
-                    "parameters": {"type": "object", "properties": {}}
+                    "parameters": {"type": "object", "properties": {"dummy": {"type": "string", "description": "leave empty"}}}
                 }
             },
             {
@@ -113,7 +112,7 @@ class ITAgent(BaseAgent):
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "ticket_id": {"type": "integer", "description": "The ticket ID to check"}
+                            "ticket_id": {"type": "string", "description": "The ticket ID to check"}
                         },
                         "required": ["ticket_id"]
                     }
@@ -127,7 +126,7 @@ class ITAgent(BaseAgent):
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "ticket_id": {"type": "integer", "description": "The ticket ID"},
+                            "ticket_id": {"type": "string", "description": "The ticket ID"},
                             "engineer": {"type": "string", "description": "Username of the engineer to assign to"}
                         },
                         "required": ["ticket_id", "engineer"]
@@ -142,7 +141,7 @@ class ITAgent(BaseAgent):
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "ticket_id": {"type": "integer", "description": "The ticket ID to resolve"}
+                            "ticket_id": {"type": "string", "description": "The ticket ID to resolve"}
                         },
                         "required": ["ticket_id"]
                     }
@@ -153,7 +152,7 @@ class ITAgent(BaseAgent):
                 "function": {
                     "name": "view_my_assets",
                     "description": "View the user's asset requests and their statuses.",
-                    "parameters": {"type": "object", "properties": {}}
+                    "parameters": {"type": "object", "properties": {"dummy": {"type": "string", "description": "leave empty"}}}
                 }
             },
             {
@@ -161,7 +160,7 @@ class ITAgent(BaseAgent):
                 "function": {
                     "name": "check_maintenance",
                     "description": "Check the planned maintenance schedule.",
-                    "parameters": {"type": "object", "properties": {}}
+                    "parameters": {"type": "object", "properties": {"dummy": {"type": "string", "description": "leave empty"}}}
                 }
             },
             {
@@ -169,7 +168,7 @@ class ITAgent(BaseAgent):
                 "function": {
                     "name": "check_outages",
                     "description": "Check current known outages and active incidents.",
-                    "parameters": {"type": "object", "properties": {}}
+                    "parameters": {"type": "object", "properties": {"dummy": {"type": "string", "description": "leave empty"}}}
                 }
             },
             {
@@ -194,7 +193,7 @@ class ITAgent(BaseAgent):
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "approval_id": {"type": "integer", "description": "The approval record ID"},
+                            "approval_id": {"type": "string", "description": "The approval record ID"},
                             "decision": {"type": "string", "enum": ["approved", "rejected"]}
                         },
                         "required": ["approval_id", "decision"]
@@ -209,7 +208,7 @@ The current user is: {user_id} with role: {role}
 
 STRICT RULES:
 1. Use the provided tools to perform actions. ALWAYS call a tool when the user wants an IT action.
-2. For ticket creation: ALWAYS call 'create_ticket'. The system will automatically check for maintenance, outages, and duplicates before creating.
+2. For ticket creation: If the user doesn't provide enough details, call 'create_ticket' with NO parameters to trigger the ticket form. The system will automatically check for maintenance, outages, and duplicates before creating if details are provided.
 3. For asset requests: call 'request_asset'. The system will check inventory and create an approval workflow.
 4. RBAC enforcement:
    - Employees can ONLY view their own tickets and assets.
@@ -247,7 +246,12 @@ STRICT RULES:
             if msg.tool_calls:
                 tool_call = msg.tool_calls[0]
                 func_name = tool_call.function.name
-                args = json.loads(tool_call.function.arguments)
+                try:
+                    args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
+                except Exception:
+                    args = {}
+                if args is None:
+                    args = {}
 
                 if func_name == "create_ticket":
                     return self._create_ticket(args, user_id)
@@ -291,10 +295,24 @@ STRICT RULES:
 
     def _create_ticket(self, args: dict, user_id: str) -> AgentResult:
         """Intelligent ticket creation — checks maintenance, outages, duplicates first."""
-        issue_type = args.get("issue_type", "general")
-        description = args.get("description", "")
+        issue_type = args.get("issue_type")
+        description = args.get("description")
         priority = args.get("priority", "medium")
 
+        if not issue_type or not description:
+            # Missing details -> Return the adaptive card
+            return AgentResult(
+                response="📝 **Raise IT Ticket**\n\nPlease provide the details of your issue using the form below, or describe it in the chat (e.g., *'raise ticket for VPN with high priority because it keeps disconnecting'*).",
+                tool_calls=[{
+                    "type": "adaptive_card",
+                    "card_type": "ticket_form",
+                    "data": {
+                        "issue_types": ["laptop", "vpn", "email", "printer", "network", "software", "password_reset", "general"]
+                    }
+                }]
+            )
+
+        issue_type = issue_type or "general"
         warnings = []
 
         # 1. Check planned maintenance

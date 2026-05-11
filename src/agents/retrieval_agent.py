@@ -25,21 +25,45 @@ class RAGAgent(BaseAgent):
     def handle(self, state: dict) -> AgentResult:
         query = state.get("query", "")
         role = state.get("role", "")
+        intent = state.get("intent", "")
 
         # Retrieve relevant documents via local TF-IDF
         results = self.vector_store.query(query, k=5, role=role)
 
         # Build context from retrieved documents
+        web_search_used = False
         if not results:
-            context = "No specific policy documents found for this query."
+            if intent == "general":
+                try:
+                    from ddgs import DDGS
+                    results_web = DDGS().text(query, max_results=3)
+                    if results_web:
+                        context = "\n\n".join([f"**From {res.get('title', 'Web')}:**\n{res.get('body', '')}" for res in results_web])
+                        web_search_used = True
+                    else:
+                        context = "No specific policy documents found for this query."
+                except Exception as e:
+                    context = f"No specific policy documents found for this query. (Web search failed: {e})"
+            else:
+                context = "No specific policy documents found for this query."
         else:
             context = "\n\n".join(
                 [f"**From {doc.metadata.get('source', 'Unknown')}:**\n{doc.content}" for doc in results]
             )
 
-        prompt = f"""You are Novi Pilot. You assist employees with HR, IT, Finance inquiries, and general company policies.
+        if web_search_used:
+            prompt = f"""You are Novi Pilot. You assist employees with HR, IT, Finance inquiries.
+I couldn't find the answer in our internal company PDFs, so I searched the public web. Answer the user's question based on these web search results. Make sure to mention that this information is from the public internet, not an internal policy.
+
+WEB SEARCH RESULTS:
+{context}
+
+USER QUESTION: {query}"""
+        else:
+            prompt = f"""You are Novi Pilot. You assist employees with HR, IT, Finance inquiries, and general company policies.
 If the user says a conversational greeting (like "hi", "hello"), respond politely and ask how you can help.
 If the user asks a policy question, answer based ONLY on the provided policy documents below. If the answer is not in the documents, explicitly say "I couldn't find that in the company policies."
+If the user asks a general knowledge question (e.g., how to make biryani, sports, history), you may answer it using your general knowledge or the context provided, but mention that this is not a company policy.
 
 COMPANY POLICIES:
 {context}

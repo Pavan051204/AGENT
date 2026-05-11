@@ -49,3 +49,5 @@ Thumbs.db
 # Data and logs
 *.log
 data/vector_store/
+test_output*.txt
+test_results.json

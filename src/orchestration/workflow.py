@@ -88,6 +88,9 @@ def _classify_intent(query: str) -> str:
         "feverish", "fever", "unwell",
     ]):
         return "hr-leave"
+        
+    if "policy" in q or "policies" in q:
+        scores["hr-policy"] += 5
 
     for kw in _HR_LEAVE_KEYWORDS:
         if kw in q:
