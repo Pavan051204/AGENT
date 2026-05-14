@@ -34,6 +34,7 @@ from src.tools.pdf_ingest import ingest_pdfs
 
 class RegisterRequest(BaseModel):
     username: str
+    email: str
     password: str
     role: str = "employee"
 
@@ -47,6 +48,7 @@ class AuthResponse(BaseModel):
     success: bool
     token: str = ""
     username: str = ""
+    email: str = ""
     role: str = ""
     message: str = ""
 
@@ -97,11 +99,12 @@ def create_app() -> FastAPI:
     def register(req: RegisterRequest) -> AuthResponse:
         """Create a new user account."""
         username = req.username.strip()
+        email = req.email.strip()
         password = req.password.strip()
         role = req.role.strip().lower()
 
-        if not username or not password:
-            return AuthResponse(success=False, message="Username and password are required.")
+        if not username or not email or not password:
+            return AuthResponse(success=False, message="Username, email, and password are required.")
 
         if len(username) < 3:
             return AuthResponse(success=False, message="Username must be at least 3 characters.")
@@ -118,16 +121,17 @@ def create_app() -> FastAPI:
             return AuthResponse(success=False, message="Username already exists.")
 
         password_hash = hash_password(password)
-        user_id = create_user(username, password_hash, role)
+        user_id = create_user(username, email, password_hash, role)
 
         if user_id is None:
-            return AuthResponse(success=False, message="Registration failed. Please try again.")
+            return AuthResponse(success=False, message="Registration failed. Username or email may already exist.")
 
         token = create_token(str(user_id), username, role)
         return AuthResponse(
             success=True,
             token=token,
             username=username,
+            email=email,
             role=role,
             message="Account created successfully!",
         )
@@ -153,6 +157,7 @@ def create_app() -> FastAPI:
             success=True,
             token=token,
             username=user["username"],
+            email=user.get("email", f"{user['username']}@novigo.com"),
             role=user["role"],
             message="Login successful!",
         )
@@ -160,11 +165,34 @@ def create_app() -> FastAPI:
     @app.get("/auth/me")
     def me(current_user: dict = Depends(get_current_user)) -> dict:
         """Return information about the currently authenticated user."""
+        user = get_user_by_username(current_user["username"])
+        email = user.get("email", f"{current_user['username']}@novigo.com") if user else ""
         return {
             "user_id": current_user["user_id"],
             "username": current_user["username"],
+            "email": email,
             "role": current_user["role"],
         }
+
+    class ChangePasswordRequest(BaseModel):
+        old_password: str
+        new_password: str
+
+    @app.post("/auth/change-password")
+    def change_password(req: ChangePasswordRequest, current_user: dict = Depends(get_current_user)) -> dict:
+        user = get_user_by_username(current_user["username"])
+        if not user:
+            return {"success": False, "message": "User not found."}
+        if not verify_password(req.old_password, user["password_hash"]):
+            return {"success": False, "message": "Incorrect old password."}
+        
+        new_hash = hash_password(req.new_password)
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute("UPDATE users SET password_hash = ? WHERE id = ?", (new_hash, user["id"]))
+        conn.commit()
+        conn.close()
+        return {"success": True, "message": "Password updated successfully!"}
 
     # ------------------------------------------------------------------
     # Pages
@@ -195,9 +223,13 @@ def create_app() -> FastAPI:
     @app.post("/api/chat", response_model=ChatResponse)
     def chat(req: ChatRequest, current_user: dict = Depends(get_current_user)) -> ChatResponse:
         """Chat endpoint – requires a valid JWT token."""
+        # Standardize: Use current_user["username"] for business logic/DB records
+        # instead of the client-provided user_id which might be inconsistent.
+        user_id_to_use = current_user["username"]
+        
         result = run_graph(
-            user_id=req.user_id,
-            role=current_user["role"],  # Use role from token, not from request
+            user_id=user_id_to_use,
+            role=current_user["role"],
             query=req.query,
             session_id=req.session_id,
             model_preference=req.model_preference,
@@ -264,7 +296,7 @@ def create_app() -> FastAPI:
             return {"error": "Status must be 'approved' or 'rejected'."}
 
         # Update the approval record
-        approve_request(approval_id, current_user["user_id"], decision.status)
+        approve_request(approval_id, current_user["username"], decision.status)
 
         # Find the underlying request
         conn = _get_conn()
@@ -305,11 +337,11 @@ def create_app() -> FastAPI:
     def get_leaves(current_user: dict = Depends(get_current_user)) -> dict:
         """Get leave records. Employees see own; HR/admin see all."""
         role = current_user["role"]
-        user_id = current_user["user_id"]
+        username = current_user["username"]
         if role in ("hr", "admin"):
             leaves = get_all_leaves()
         else:
-            leaves = list_leaves(user_id)
+            leaves = list_leaves(username)
         return {"leaves": leaves}
 
     @app.get("/api/leaves/pending")
@@ -372,6 +404,19 @@ def create_app() -> FastAPI:
             return {"error": "Access denied. Only IT team can resolve tickets."}
         result = resolve_ticket(ticket_id, current_user["username"])
         success = "resolved" in result.lower()
+        return {"success": success, "message": result}
+
+    class AssignTicketRequest(BaseModel):
+        engineer: str
+
+    @app.post("/api/tickets/{ticket_id}/assign")
+    def assign_ticket_endpoint(ticket_id: int, req: AssignTicketRequest, current_user: dict = Depends(get_current_user)) -> dict:
+        """Assign a ticket to an engineer. IT team and admin only."""
+        role = current_user["role"]
+        if role not in ("it", "admin"):
+            return {"error": "Access denied. Only IT team can assign tickets."}
+        result = assign_ticket(ticket_id, req.engineer)
+        success = "assigned" in result.lower()
         return {"success": success, "message": result}
 
     # ------------------------------------------------------------------

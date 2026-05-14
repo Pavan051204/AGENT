@@ -9,7 +9,8 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
-    <link rel="stylesheet" href="/static/styles.css?v=5" />
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="/static/styles.css?v=15" />
   </head>
   <body>
     <!-- Main Container -->
@@ -53,7 +54,7 @@
           </button>
         </nav>
 
-        <!-- Settings Panel -->
+        <!-- Chat Settings Panel -->
         <div class="nav-panel active" id="chatPanel">
           <div class="sidebar-panel">
             <h3 class="panel-title"><i class="fas fa-link"></i> Session</h3>
@@ -74,16 +75,16 @@
               <p><strong>Current:</strong> <span id="currentModel">-</span></p>
               <p><strong>Status:</strong> <span id="modelStatusText" class="status-ready">Ready</span></p>
             </div>
-          </div>
+          </div><!-- /.sidebar-panel -->
+        </div><!-- /#chatPanel -->
 
-        <!-- Dashboard Panel Sidebar (Empty for now, acts as placeholder) -->
+        <!-- Dashboard Panel Sidebar -->
         <div class="nav-panel" id="dashboardPanel">
           <div class="sidebar-panel">
             <h3 class="panel-title"><i class="fas fa-info-circle"></i> Overview</h3>
             <p class="placeholder-text">Dashboard metrics are displayed in the main view.</p>
           </div>
-        </div>
-
+        </div><!-- /#dashboardPanel -->
 
       </aside>
 
@@ -117,24 +118,7 @@
               <h2>Welcome to Novi Pilot</h2>
               <p>Your intelligent assistant for HR, IT, and Finance operations</p>
               <div class="quick-actions" id="quickActions">
-                <button class="quick-action-btn grad-btn-1" data-query="Check leave balance">
-                  <i class="fas fa-chart-pie"></i> Leave Balance
-                </button>
-                <button class="quick-action-btn grad-btn-2" data-query="Show holiday calendar">
-                  <i class="fas fa-calendar"></i> Holidays
-                </button>
-                <button class="quick-action-btn grad-btn-3" data-query="Show leave history">
-                  <i class="fas fa-history"></i> Leave History
-                </button>
-                <button class="quick-action-btn grad-btn-4" data-query="What is the notice period policy?">
-                  <i class="fas fa-book"></i> Policies
-                </button>
-                <button class="quick-action-btn grad-btn-5" data-query="Raise a ticket for VPN issue">
-                  <i class="fas fa-plus-circle"></i> Raise Ticket
-                </button>
-                <button class="quick-action-btn grad-btn-6" data-query="Show my tickets">
-                  <i class="fas fa-list"></i> My Tickets
-                </button>
+                <!-- Populated dynamically by app.js based on user role -->
               </div>
             </div>
           </div>
@@ -167,7 +151,7 @@
       <!-- Dashboard Main Content -->
       <main class="main-content" id="dashboardMainView" style="display: none; overflow-y: auto; padding: 28px;">
         <header style="margin-bottom: 24px; border-bottom: 1px solid var(--border); padding-bottom: 16px;">
-          <h1 style="font-size: 26px; font-weight: 800; background: var(--grad-main); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
+          <h1 style="font-size: 26px; font-weight: 800; background: linear-gradient(135deg,var(--accent),var(--cyan)); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
             <i class="fas fa-chart-pie" style="margin-right: 8px;"></i> Enterprise Dashboard
           </h1>
           <p style="color: var(--text-muted); margin-top: 4px;">Comprehensive overview of your operations, leaves, and requests.</p>
@@ -176,22 +160,43 @@
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 24px;">
           
           <!-- Leave Balances -->
-          <div class="dashboard-card">
-            <h3 class="panel-title"><i class="fas fa-calendar-days"></i> Leave Balances</h3>
+          <div class="dashboard-card" id="leaveBalanceCard">
+            <h3 class="panel-title" id="leaveBalanceTitle"><i class="fas fa-calendar-days"></i> Leave Balances</h3>
             <div id="balanceList" class="balance-list">
               <p class="placeholder-text">Loading...</p>
             </div>
           </div>
 
           <!-- IT Tickets -->
-          <div class="dashboard-card">
-            <h3 class="panel-title"><i class="fas fa-ticket"></i> IT Tickets</h3>
+          <div class="dashboard-card" id="itTicketsCard">
+            <h3 class="panel-title" id="itTicketsTitle"><i class="fas fa-ticket"></i> IT Tickets</h3>
             <div id="ticketsList" class="tickets-list">
               <p class="placeholder-text">Loading...</p>
             </div>
             <button class="btn-refresh" id="refreshTicketsBtn">
               <i class="fas fa-sync-alt"></i> Refresh Tickets
             </button>
+          </div>
+
+          <!-- Leave History -->
+          <div class="dashboard-card" id="leaveHistoryCard" style="grid-column: 1 / -1;">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <h3 class="panel-title" style="margin-bottom:0"><i class="fas fa-clock-rotate-left"></i> Leave History</h3>
+              <button class="btn-refresh" id="refreshLeavesBtn" style="width:auto;margin:0;padding:6px 14px">
+                <i class="fas fa-sync-alt"></i> Refresh
+              </button>
+            </div>
+            <div id="leaveHistoryList" class="leave-history-list">
+              <p class="placeholder-text">Loading...</p>
+            </div>
+          </div>
+
+          <!-- Asset Requests (for all roles) -->
+          <div class="dashboard-card" id="assetRequestsCard" style="grid-column: 1 / -1;">
+            <h3 class="panel-title"><i class="fas fa-box"></i> Asset Requests</h3>
+            <div id="assetRequestsList" class="tickets-list">
+              <p class="placeholder-text">Loading...</p>
+            </div>
           </div>
 
           <!-- Pending Approvals -->
@@ -201,6 +206,30 @@
               <p class="placeholder-text">No pending approvals</p>
             </div>
           </div>
+
+          <!-- Profile & Settings -->
+          <div class="dashboard-card" id="profileSettingsCard" style="grid-column: 1 / -1;">
+            <h3 class="panel-title"><i class="fas fa-user-shield"></i> Profile & Security</h3>
+            <div style="display: flex; gap: 20px; flex-wrap: wrap;">
+              <div style="flex: 1; min-width: 250px; padding: 16px; background: var(--surface2); border-radius: 8px;">
+                <h4 style="margin-top: 0; color: var(--text);">Employee Details</h4>
+                <p><strong>Name:</strong> <span id="dashProfileName">Loading...</span></p>
+                <p><strong>Email:</strong> <span id="dashProfileEmail">Loading...</span></p>
+                <p><strong>Role:</strong> <span id="dashProfileRole">Loading...</span></p>
+              </div>
+              <div style="flex: 1; min-width: 250px; padding: 16px; background: var(--surface2); border-radius: 8px;">
+                <h4 style="margin-top: 0; color: var(--text);">Change Password</h4>
+                <form id="changePasswordForm" style="display: flex; flex-direction: column; gap: 10px;">
+                  <input type="password" id="oldPassword" placeholder="Current Password" class="message-input" required />
+                  <input type="password" id="newPassword" placeholder="New Password" class="message-input" required />
+                  <button type="submit" class="btn-action-submit">
+                    <i class="fas fa-key"></i> Update Password
+                  </button>
+                  <p id="passwordChangeMessage" style="font-size: 13px; margin:0;"></p>
+                </form>
+              </div>
+            </div>
+          </div>
         </div>
       </main>
     </div>
@@ -208,6 +237,6 @@
     <!-- Toast Notifications -->
     <div class="toast-container" id="toastContainer"></div>
 
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=21"></script>
   </body>
 </html>

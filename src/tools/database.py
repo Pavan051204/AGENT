@@ -161,6 +161,7 @@ def init_db() -> None:
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE NOT NULL,
+            email TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
             role TEXT NOT NULL DEFAULT 'employee',
             created_at TEXT
@@ -216,17 +217,17 @@ def init_db() -> None:
 # User management (RBAC)
 # ---------------------------------------------------------------------------
 
-def create_user(username: str, password_hash: str, role: str) -> int | None:
+def create_user(username: str, email: str, password_hash: str, role: str) -> int | None:
     """Insert a new user and auto-provision leave balances.
 
-    Returns the user id, or None if the username exists.
+    Returns the user id, or None if the username/email exists.
     """
     conn = _get_conn()
     cur = conn.cursor()
     try:
         cur.execute(
-            "INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, ?, ?)",
-            (username, password_hash, role, _now()),
+            "INSERT INTO users (username, email, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)",
+            (username, email, password_hash, role, _now()),
         )
         user_id = cur.lastrowid
         # Auto-provision default leave balances for the new user
@@ -265,7 +266,7 @@ def get_user_by_username(username: str) -> dict | None:
     conn = _get_conn()
     cur = conn.cursor()
     cur.execute(
-        "SELECT id, username, password_hash, role, created_at FROM users WHERE username = ?",
+        "SELECT id, username, email, password_hash, role, created_at FROM users WHERE username = ?",
         (username,),
     )
     row = cur.fetchone()
@@ -275,9 +276,10 @@ def get_user_by_username(username: str) -> dict | None:
     return {
         "id": row[0],
         "username": row[1],
-        "password_hash": row[2],
-        "role": row[3],
-        "created_at": row[4],
+        "email": row[2],
+        "password_hash": row[3],
+        "role": row[4],
+        "created_at": row[5],
     }
 
 
@@ -332,7 +334,7 @@ def list_leaves(user_id: str) -> list[dict]:
     conn = _get_conn()
     cur = conn.cursor()
     cur.execute(
-        "SELECT id, start_date, end_date, status, reason FROM leaves WHERE user_id = ?",
+        "SELECT id, start_date, end_date, status, reason, leave_type, created_at FROM leaves WHERE user_id = ? ORDER BY id DESC",
         (user_id,),
     )
     rows = cur.fetchall()
@@ -344,6 +346,8 @@ def list_leaves(user_id: str) -> list[dict]:
             "end_date": row[2],
             "status": row[3],
             "reason": row[4],
+            "leave_type": row[5] or "casual",
+            "created_at": row[6] or "",
         }
         for row in rows
     ]
@@ -607,6 +611,40 @@ def cancel_leave(leave_id: int, user_id: str) -> str:
     return f"Leave request {leave_id} has been cancelled."
 
 
+def process_leave_decision(leave_id: int, status: str, approver_id: str) -> str:
+    """Approve or reject a leave request, updating balances if approved."""
+    leave = get_leave_by_id(leave_id)
+    if not leave:
+        return f"Leave request {leave_id} not found."
+    
+    if leave["status"] != "pending":
+        return f"Leave request {leave_id} is already {leave['status']}."
+    
+    conn = _get_conn()
+    cur = conn.cursor()
+    
+    # 1. Update the leave status
+    cur.execute("UPDATE leaves SET status = ? WHERE id = ?", (status, leave_id))
+    
+    # 2. Update any associated approval records
+    cur.execute(
+        "UPDATE approvals SET status = ?, approver_id = ? WHERE request_type = 'leave' AND request_id = ? AND status = 'pending'",
+        (status, approver_id, leave_id)
+    )
+    
+    conn.commit()
+    conn.close()
+    
+    # 3. If approved, deduct from balance
+    if status == "approved":
+        days = count_working_days(leave["start_date"], leave["end_date"])
+        leave_type = leave.get("leave_type", "casual") or "casual"
+        deduct_leave_balance(leave["user_id"], leave_type, days)
+        return f"Leave request {leave_id} for {leave['user_id']} has been approved. {days} days deducted from {leave_type} balance."
+    
+    return f"Leave request {leave_id} for {leave['user_id']} has been rejected."
+
+
 def get_pending_leaves(user_id: str) -> list[dict]:
     """Get all pending leave requests for a user."""
     conn = _get_conn()
@@ -656,15 +694,16 @@ def get_all_leaves(status_filter: str | None = None) -> list[dict]:
     cur = conn.cursor()
     if status_filter:
         cur.execute(
-            "SELECT id, user_id, start_date, end_date, status, reason FROM leaves WHERE status = ?",
+            "SELECT id, user_id, start_date, end_date, status, reason, leave_type, created_at FROM leaves WHERE status = ? ORDER BY id DESC",
             (status_filter,),
         )
     else:
-        cur.execute("SELECT id, user_id, start_date, end_date, status, reason FROM leaves")
+        cur.execute("SELECT id, user_id, start_date, end_date, status, reason, leave_type, created_at FROM leaves ORDER BY id DESC")
     rows = cur.fetchall()
     conn.close()
     return [
-        {"id": r[0], "user_id": r[1], "start_date": r[2], "end_date": r[3], "status": r[4], "reason": r[5]}
+        {"id": r[0], "user_id": r[1], "start_date": r[2], "end_date": r[3], "status": r[4], "reason": r[5],
+         "leave_type": r[6] or "casual", "created_at": r[7] or ""}
         for r in rows
     ]
 

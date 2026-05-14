@@ -77,15 +77,13 @@ def _classify_intent(query: str) -> str:
         "finance": 0,
     }
 
+    # Contextual routing: Prioritize IT keywords if "ticket" or "asset" is mentioned
+    if any(kw in q for kw in ["ticket", "asset", "resolve", "assign"]):
+        return "it"
+
     # Direct match for common HR requests
     if any(k in q for k in [
-        "pending approvals", "show approvals", "my approvals",
-        "pending request", "approve it", "reject it",
-        "apply leave", "take leave", "want leave", "need leave",
-        "leave balance", "leave history", "cancel leave",
-        "sick leave", "casual leave", "earned leave", "comp off",
-        "i am sick", "i am ill", "feeling sick", "not feeling well",
-        "feverish", "fever", "unwell",
+        "leave", "holiday", "calendar", "day off", "time off", "vacation"
     ]):
         return "hr-leave"
         

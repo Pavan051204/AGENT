@@ -48,11 +48,15 @@ class HRAgent(BaseAgent):
         
         # ── Apply Leave ───────────────────────────────────────────────
         if intent == "apply_leave":
-            return self._apply_leave_parsed(parsed, user_id)
+            return self._apply_leave_parsed(parsed, user_id, query)
 
         # ── Cancel Leave ──────────────────────────────────────────────
         if intent == "cancel_leave":
             return self._cancel_leave(query, user_id)
+
+        # ── HR Approve/Reject ─────────────────────────────────────────
+        if intent in ("approve_leave", "reject_leave", "approve_all_leaves"):
+            return self._handle_hr_decision(intent, parsed, user_id, role)
 
         # ── Leave Balance ─────────────────────────────────────────────
         if intent == "leave_balance":
@@ -123,14 +127,16 @@ You must analyze the user's latest query, considering the chat history, and outp
 Today's date is {date.today().isoformat()}.
 
 Extract these fields:
-- intent: strictly one of ["apply_leave", "cancel_leave", "leave_balance", "leave_history", "pending_leaves", "approval_status", "holiday_calendar", "unknown"]
+- intent: strictly one of ["apply_leave", "cancel_leave", "approve_leave", "reject_leave", "approve_all_leaves", "leave_balance", "leave_history", "pending_leaves", "approval_status", "holiday_calendar", "unknown"]
 - start_date: YYYY-MM-DD (if mentioned for leave application)
 - end_date: YYYY-MM-DD (if mentioned. if only one day mentioned, end_date = start_date)
 - leave_type: one of ["casual", "sick", "earned", "comp_off"]
 - reason: brief string reason for leave
 - hr: assigned HR username if mentioned
+- leave_id: extract any mentioned leave/request ID as a number
 
-Return ONLY a JSON object. No markdown, no intro/outro text."""
+Return ONLY a JSON object. No markdown, no intro/outro text.
+If the user wants to approve/reject a leave, set the intent to "approve_leave" or "reject_leave" and extract the leave_id."""
 
         history_text = "\n".join([f"{msg['role']}: {msg['query']}" for msg in chat_history[-3:]])
         user_prompt = f"Chat History:\n{history_text}\n\nLatest Query: {query}"
@@ -150,16 +156,16 @@ Return ONLY a JSON object. No markdown, no intro/outro text."""
             print("LLM Parsing Error:", e)
             return {"intent": "unknown"}
 
-    def _apply_leave_parsed(self, parsed: dict, user_id: str) -> AgentResult:
+    def _apply_leave_parsed(self, parsed: dict, user_id: str, query: str) -> AgentResult:
         start_date = parsed.get("start_date")
         end_date = parsed.get("end_date")
-        leave_type = parsed.get("leave_type", "casual")
-        assigned_hr = parsed.get("hr", "")
-        reason = parsed.get("reason", "")
+        leave_type = parsed.get("leave_type") or "casual"
+        assigned_hr = parsed.get("hr") or ""
+        reason = parsed.get("reason") or ""
 
-        if not start_date or not end_date:
-            # Return an adaptive card for leave application form
-            return self._render_leave_form(user_id)
+        if not start_date or not end_date or not query.strip().upper().startswith("CONFIRM"):
+            # Return an adaptive card for leave application form (pre-filled if data exists)
+            return self._render_leave_form(user_id, parsed)
 
         # ── Validate dates ────────────────────────────────────────
         validation_error = database.validate_leave_dates(start_date, end_date)
@@ -210,15 +216,20 @@ Return ONLY a JSON object. No markdown, no intro/outro text."""
         )
 
         response = (
-            f"✅ **Leave Request Submitted**\n\n"
-            f"• **Request ID:** {result.request_id}\n"
-            f"• **Leave Type:** {LEAVE_TYPE_LABELS.get(leave_type, leave_type)}\n"
-            f"• **Dates:** {start_date} to {end_date}\n"
-            f"• **Working days:** {working_days}\n"
-            f"• **Reason:** {reason or 'Not specified'}\n"
-            f"• **Assigned HR:** {assigned_hr or 'Any available'}\n"
-            f"• **Status:** Pending HR Approval\n"
-            f"• **Remaining {LEAVE_TYPE_LABELS.get(leave_type, leave_type)}:** {balance - working_days} days"
+            f'<div class="adaptive-card">'
+            f'<div class="adaptive-card-header success"><i class="fas fa-check-circle"></i> Leave Request Submitted</div>'
+            f'<div class="adaptive-card-body">'
+            f'<div class="info-grid">'
+            f'<div><strong>Request ID:</strong> #{result.request_id}</div>'
+            f'<div><strong>Status:</strong> <span class="badge warning">Pending HR</span></div>'
+            f'<div><strong>Type:</strong> {LEAVE_TYPE_LABELS.get(leave_type, leave_type)}</div>'
+            f'<div><strong>Dates:</strong> {start_date} to {end_date}</div>'
+            f'<div><strong>Working days:</strong> {working_days}</div>'
+            f'<div><strong>Assigned HR:</strong> {assigned_hr or "Any available"}</div>'
+            f'</div>'
+            f'<div class="info-row" style="margin-top:10px;"><strong>Reason:</strong> {reason or "Not specified"}</div>'
+            f'<div class="info-row"><strong>Remaining {LEAVE_TYPE_LABELS.get(leave_type, leave_type)}:</strong> {balance - working_days} days</div>'
+            f'</div></div>'
         )
 
         if holiday_note:
@@ -226,34 +237,67 @@ Return ONLY a JSON object. No markdown, no intro/outro text."""
 
         return AgentResult(response=response, approval_required=True)
 
-    def _render_leave_form(self, user_id: str) -> AgentResult:
+    def _render_leave_form(self, user_id: str, prefill: dict = None) -> AgentResult:
         """Render an adaptive card for leave application when dates are missing."""
+        prefill = prefill or {}
+        p_type = prefill.get("leave_type") or "casual"
+        p_start = prefill.get("start_date") or ""
+        p_end = prefill.get("end_date") or ""
+        p_reason = prefill.get("reason") or ""
+        p_hr = prefill.get("hr") or ""
+
         hr_users = database.get_hr_users()
         balance = database.get_leave_balance(user_id)
 
-        # Build balance summary
+        # Build balance summary as proper HTML
         if isinstance(balance, dict):
-            balance_lines = "\n".join(
-                f"  • **{LEAVE_TYPE_LABELS.get(lt, lt)}:** {info['remaining']}/{info['total']} remaining"
-                for lt, info in balance.items()
-            )
+            balance_html = '<div class="info-grid">'
+            for lt, info in balance.items():
+                pct = round((info['remaining'] / max(info['total'], 1)) * 100)
+                color = '#34d399' if pct > 50 else '#fb923c' if pct > 25 else '#f87171'
+                balance_html += (
+                    f'<div>'
+                    f'<strong>{LEAVE_TYPE_LABELS.get(lt, lt)}</strong>'
+                    f'{info["remaining"]}/{info["total"]} remaining'
+                    f'<div style="height:4px;background:rgba(255,255,255,.06);border-radius:2px;margin-top:4px;">'
+                    f'<div style="height:100%;width:{pct}%;background:{color};border-radius:2px;"></div>'
+                    f'</div></div>'
+                )
+            balance_html += '</div>'
         else:
-            balance_lines = f"  • Total: {balance} days"
+            balance_html = f'<p>Total: {balance} days</p>'
 
         hr_list = ""
         if hr_users:
-            hr_options = ", ".join(f"`{h['username']}`" for h in hr_users)
-            hr_list = f"\n\n**Available HR:** {hr_options}"
+            hr_items = "".join(f'<code>{h["username"]}</code> ' for h in hr_users)
+            hr_list = f'<p style="margin-top:10px;"><strong>Available HR:</strong> {hr_items}</p>'
 
         return AgentResult(
             response=(
-                "📝 **Apply Leave — Please provide details:**\n\n"
-                f"**Your Leave Balances:**\n{balance_lines}\n\n"
-                "Please use this format:\n"
-                "*Apply [casual/sick/earned] leave from YYYY-MM-DD to YYYY-MM-DD for [reason] hr [hr_username]*\n\n"
-                "**Example:**\n"
-                "*Apply casual leave from 2026-05-10 to 2026-05-12 for family function hr john_hr*"
-                f"{hr_list}"
+                f'<div class="adaptive-card">'
+                f'<div class="adaptive-card-header primary"><i class="fas fa-calendar-plus"></i> Apply Leave — Review Details</div>'
+                f'<div class="adaptive-card-body">'
+                f'<p><strong>Your Leave Balances:</strong></p>'
+                f'{balance_html}'
+                f'<div class="help-box" style="display:flex; flex-direction:column; gap:10px; margin-top:16px;">'
+                f'<select class="message-input ac-leave-type" style="width:100%;">'
+                f'<option value="casual" {"selected" if p_type=="casual" else ""}>Casual Leave</option>'
+                f'<option value="sick" {"selected" if p_type=="sick" else ""}>Sick Leave</option>'
+                f'<option value="earned" {"selected" if p_type=="earned" else ""}>Earned Leave</option>'
+                f'<option value="comp_off" {"selected" if p_type=="comp_off" else ""}>Compensatory Off</option>'
+                f'</select>'
+                f'<div style="display:flex; gap:10px;">'
+                f'<input type="date" class="message-input ac-start-date" style="flex:1;" value="{p_start}" />'
+                f'<input type="date" class="message-input ac-end-date" style="flex:1;" value="{p_end}" />'
+                f'</div>'
+                f'<input type="text" class="message-input ac-reason" placeholder="Reason for leave..." style="width:100%;" value="{p_reason}" />'
+                f'<select class="message-input ac-hr" style="width:100%;">'
+                f'<option value="">-- Select Assigned HR --</option>'
+                + "".join([f'<option value="{h["username"]}" {"selected" if p_hr==h["username"] else ""}>{h["username"]}</option>' for h in hr_users]) +
+                f'</select>'
+                f'<button class="icon-btn" style="background:var(--accent); color:white; justify-content:center; width:100%; border-radius:8px;" onclick="submitAdaptiveLeaveForm(this)"><i class="fas fa-paper-plane"></i> Confirm & Submit Leave</button>'
+                f'</div>'
+                f'</div></div>'
             ),
             tool_calls=[{
                 "type": "adaptive_card",
@@ -272,18 +316,26 @@ Return ONLY a JSON object. No markdown, no intro/outro text."""
         hr_users: list[dict], working_days: int,
     ) -> AgentResult:
         """Render an adaptive card to pick an HR for the leave request."""
-        hr_options = "\n".join(f"  • `{h['username']}`" for h in hr_users)
+        hr_buttons = "".join(
+            f'<button class="icon-btn" style="background:var(--surface2); border:1px solid var(--border); width:100%; justify-content:center; margin-bottom:8px;" onclick="submitAdaptiveHRSelect(\'{leave_type}\', \'{start_date}\', \'{end_date}\', \'{reason}\', \'{h["username"]}\')">'
+            f'<i class="fas fa-user"></i> {h["username"]}'
+            f'</button>' 
+            for h in hr_users
+        )
         return AgentResult(
             response=(
-                f"📋 **Almost done! Please select an HR to send your request to:**\n\n"
-                f"**Leave Details:**\n"
-                f"• Type: {LEAVE_TYPE_LABELS.get(leave_type, leave_type)}\n"
-                f"• Dates: {start_date} to {end_date}\n"
-                f"• Working Days: {working_days}\n"
-                f"• Reason: {reason or 'Not specified'}\n\n"
-                f"**Available HR:**\n{hr_options}\n\n"
-                "Reply with:\n"
-                f"*Apply {leave_type} leave from {start_date} to {end_date} for {reason or 'personal'} hr [HR_USERNAME]*"
+                f'<div class="adaptive-card">'
+                f'<div class="adaptive-card-header info"><i class="fas fa-clipboard-user"></i> Select HR Assigned</div>'
+                f'<div class="adaptive-card-body">'
+                f'<div class="info-grid">'
+                f'<div><strong>Type:</strong> {LEAVE_TYPE_LABELS.get(leave_type, leave_type)}</div>'
+                f'<div><strong>Dates:</strong> {start_date} to {end_date}</div>'
+                f'<div><strong>Working Days:</strong> {working_days}</div>'
+                f'<div><strong>Reason:</strong> {reason or "Not specified"}</div>'
+                f'</div>'
+                f'<p style="margin-top:10px; margin-bottom:10px;"><strong>Select an available HR to route your request to:</strong></p>'
+                f'{hr_buttons}'
+                f'</div></div>'
             ),
             tool_calls=[{
                 "type": "adaptive_card",
@@ -307,6 +359,32 @@ Return ONLY a JSON object. No markdown, no intro/outro text."""
             )
         result_msg = database.cancel_leave(leave_id, user_id)
         icon = "✅" if "cancelled" in result_msg else "❌"
+        return AgentResult(response=f"{icon} {result_msg}")
+
+    def _handle_hr_decision(self, intent: str, parsed: dict, user_id: str, role: str) -> AgentResult:
+        if role not in ("hr", "admin", "manager"):
+            return AgentResult(response="❌ Only HR or managers can approve/reject leave requests.")
+        
+        if intent == "approve_all_leaves":
+            pending = database.get_pending_approvals()
+            leave_requests = [a for a in pending if a["request_type"] == "leave"]
+            if not leave_requests:
+                return AgentResult(response="✅ No pending leave requests to approve.")
+            
+            count = 0
+            for req in leave_requests:
+                database.process_leave_decision(req["request_id"], "approved", user_id)
+                count += 1
+            return AgentResult(response=f"🟢 Successfully approved all {count} pending leave requests.")
+
+        leave_id = parsed.get("leave_id")
+        if not leave_id:
+            return AgentResult(response="Please specify the leave ID you wish to approve or reject.")
+            
+        status = "approved" if intent == "approve_leave" else "rejected"
+        result_msg = database.process_leave_decision(int(leave_id), status, user_id)
+        
+        icon = "🟢" if status == "approved" else "🔴"
         return AgentResult(response=f"{icon} {result_msg}")
 
     def _show_balance(self, user_id: str) -> AgentResult:

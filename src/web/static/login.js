@@ -147,6 +147,7 @@ loginForm.addEventListener("submit", async (e) => {
       localStorage.setItem("auth.token", data.token);
       localStorage.setItem("auth.username", data.username);
       localStorage.setItem("auth.role", data.role);
+      if (data.email) localStorage.setItem("auth.email", data.email);
       setTimeout(() => (window.location.href = "/chat"), 600);
     } else {
       showMessage(loginMessage, data.message || "Login failed.", "error");
@@ -165,10 +166,11 @@ registerForm.addEventListener("submit", async (e) => {
   clearMessages();
 
   const username = document.getElementById("registerUsername").value.trim();
+  const email = document.getElementById("registerEmail").value.trim();
   const password = document.getElementById("registerPassword").value;
   const role = document.getElementById("registerRole").value;
 
-  if (!username || !password || !role) {
+  if (!username || !email || !password || !role) {
     showMessage(registerMessage, "Please fill in all fields.", "error");
     return;
   }
@@ -180,7 +182,7 @@ registerForm.addEventListener("submit", async (e) => {
     const res = await fetch("/auth/register", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password, role }),
+      body: JSON.stringify({ username, email, password, role }),
     });
 
     const data = await res.json();
@@ -190,6 +192,7 @@ registerForm.addEventListener("submit", async (e) => {
       localStorage.setItem("auth.token", data.token);
       localStorage.setItem("auth.username", data.username);
       localStorage.setItem("auth.role", data.role);
+      if (data.email) localStorage.setItem("auth.email", data.email);
       setTimeout(() => (window.location.href = "/chat"), 600);
     } else {
       showMessage(registerMessage, data.message || "Registration failed.", "error");

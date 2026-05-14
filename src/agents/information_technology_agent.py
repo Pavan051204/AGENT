@@ -200,6 +200,22 @@ class ITAgent(BaseAgent):
                     }
                 }
             },
+            {
+                "type": "function",
+                "function": {
+                    "name": "view_all_assets",
+                    "description": "View all asset requests across the organization. Only for IT team / admin.",
+                    "parameters": {"type": "object", "properties": {"dummy": {"type": "string", "description": "leave empty"}}}
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "resolve_all_tickets",
+                    "description": "Resolve all currently open tickets. IT team / admin only.",
+                    "parameters": {"type": "object", "properties": {"dummy": {"type": "string", "description": "leave empty"}}}
+                }
+            },
         ]
 
         system_prompt = f"""You are Novi Pilot's IT Support Agent. You help employees with IT issues, ticket management, and asset requests.
@@ -254,9 +270,9 @@ STRICT RULES:
                     args = {}
 
                 if func_name == "create_ticket":
-                    return self._create_ticket(args, user_id)
+                    return self._create_ticket(args, user_id, query)
                 elif func_name == "request_asset":
-                    return self._request_asset(args, user_id)
+                    return self._request_asset(args, user_id, query)
                 elif func_name == "view_my_tickets":
                     return self._view_tickets(user_id, role)
                 elif func_name == "view_all_tickets":
@@ -267,6 +283,8 @@ STRICT RULES:
                     return self._assign_ticket(args.get("ticket_id"), args.get("engineer"), user_id, role)
                 elif func_name == "resolve_ticket":
                     return self._resolve_ticket(args.get("ticket_id"), user_id, role)
+                elif func_name == "resolve_all_tickets":
+                    return self._resolve_all_tickets(user_id, role)
                 elif func_name == "view_my_assets":
                     return self._view_assets(user_id, role)
                 elif func_name == "check_maintenance":
@@ -275,6 +293,8 @@ STRICT RULES:
                     return self._check_outages()
                 elif func_name == "check_inventory":
                     return self._check_inventory(args.get("asset_type", ""))
+                elif func_name == "view_all_assets":
+                    return self._view_assets(user_id, role, all_assets=True)
                 elif func_name == "approve_asset":
                     aid = args.get("approval_id")
                     try:
@@ -293,16 +313,44 @@ STRICT RULES:
     #  Private helpers
     # ──────────────────────────────────────────────────────────────────
 
-    def _create_ticket(self, args: dict, user_id: str) -> AgentResult:
+    def _create_ticket(self, args: dict, user_id: str, query: str) -> AgentResult:
         """Intelligent ticket creation — checks maintenance, outages, duplicates first."""
-        issue_type = args.get("issue_type")
-        description = args.get("description")
+        issue_type = args.get("issue_type") or "general"
+        description = args.get("description") or ""
         priority = args.get("priority", "medium")
 
-        if not issue_type or not description:
-            # Missing details -> Return the adaptive card
+        is_confirmed = query.strip().upper().startswith("CONFIRM")
+
+        if not is_confirmed:
+            # Missing details or needs confirmation -> Return the adaptive card
             return AgentResult(
-                response="📝 **Raise IT Ticket**\n\nPlease provide the details of your issue using the form below, or describe it in the chat (e.g., *'raise ticket for VPN with high priority because it keeps disconnecting'*).",
+                response=(
+                    f'<div class="adaptive-card">'
+                    f'<div class="adaptive-card-header warning"><i class="fas fa-ticket"></i> Raise IT Ticket — Review Details</div>'
+                    f'<div class="adaptive-card-body">'
+                    f'<p>Please confirm the details of your issue using the form below.</p>'
+                    f'<div class="help-box" style="display:flex; flex-direction:column; gap:10px; margin-top:16px;">'
+                    f'<select class="message-input ac-issue-type" style="width:100%;">'
+                    f'<option value="laptop" {"selected" if issue_type=="laptop" else ""}>Laptop / Hardware</option>'
+                    f'<option value="vpn" {"selected" if issue_type=="vpn" else ""}>VPN / Access</option>'
+                    f'<option value="email" {"selected" if issue_type=="email" else ""}>Email</option>'
+                    f'<option value="printer" {"selected" if issue_type=="printer" else ""}>Printer</option>'
+                    f'<option value="network" {"selected" if issue_type=="network" else ""}>Network / Wi-Fi</option>'
+                    f'<option value="software" {"selected" if issue_type=="software" else ""}>Software</option>'
+                    f'<option value="password_reset" {"selected" if issue_type=="password_reset" else ""}>Password Reset</option>'
+                    f'<option value="general" {"selected" if issue_type=="general" else ""}>General Support</option>'
+                    f'</select>'
+                    f'<select class="message-input ac-priority" style="width:100%;">'
+                    f'<option value="low" {"selected" if priority=="low" else ""}>Low Priority</option>'
+                    f'<option value="medium" {"selected" if priority=="medium" else ""}>Medium Priority</option>'
+                    f'<option value="high" {"selected" if priority=="high" else ""}>High Priority</option>'
+                    f'<option value="critical" {"selected" if priority=="critical" else ""}>Critical Priority</option>'
+                    f'</select>'
+                    f'<textarea class="message-input ac-desc" placeholder="Describe your issue..." style="width:100%; min-height:60px;">{description}</textarea>'
+                    f'<button class="icon-btn" style="background:var(--accent); color:white; justify-content:center; width:100%; border-radius:8px;" onclick="submitAdaptiveTicketForm(this)"><i class="fas fa-paper-plane"></i> Confirm & Submit Ticket</button>'
+                    f'</div>'
+                    f'</div></div>'
+                ),
                 tool_calls=[{
                     "type": "adaptive_card",
                     "card_type": "ticket_form",
@@ -313,6 +361,14 @@ STRICT RULES:
             )
 
         issue_type = issue_type or "general"
+        # Fallback: extract description from the confirm query if LLM didn't provide one
+        if not description and is_confirmed:
+            import re
+            because_match = re.search(r'because\s+(.+)', query, re.IGNORECASE)
+            if because_match:
+                description = because_match.group(1).strip()
+            else:
+                description = query.strip()
         warnings = []
 
         # 1. Check planned maintenance
@@ -371,10 +427,14 @@ STRICT RULES:
 
         return AgentResult(response=response, approval_required=True)
 
-    def _request_asset(self, args: dict, user_id: str) -> AgentResult:
-        """Request an IT asset with inventory check and approval workflow."""
-        asset_type = args.get("asset_type", "laptop")
+    def _request_asset(self, args: dict, user_id: str, query: str) -> AgentResult:
+        """Request an IT asset with inventory check and a confirmation card."""
+        asset_type = args.get("asset_type")
         justification = args.get("justification", "")
+
+        if not asset_type:
+            # If no type, show a generic selection form
+            return self._render_asset_form("laptop", "", user_id)
 
         # Check inventory
         stock = database.check_inventory(asset_type)
@@ -385,20 +445,47 @@ STRICT RULES:
                 f"(0/{stock['total']} available). Please try again later or contact IT directly."
             )
 
-        asset_id = database.request_asset(user_id, asset_type, justification)
+        # If user has confirmed, actually create the asset request
+        if query.strip().upper().startswith("CONFIRM"):
+            asset_id = database.request_asset(user_id, asset_type, justification)
+            label = ASSET_TYPE_LABELS.get(asset_type, asset_type)
+            return AgentResult(
+                response=(
+                    f"✅ **Asset Request Submitted**\n\n"
+                    f"• **Request ID:** #{asset_id}\n"
+                    f"• **Asset Type:** {label}\n"
+                    f"• **Justification:** {justification or 'Not specified'}\n"
+                    f"• **Status:** Pending Approval\n"
+                    f"• **Stock Available:** {stock['available']}/{stock['total']}\n\n"
+                    f"Your request has been submitted for approval. You'll be notified once it's processed."
+                ),
+                approval_required=True,
+            )
 
-        response = (
-            f"✅ **Asset Request Submitted**\n\n"
-            f"• **Request ID:** #{asset_id}\n"
-            f"• **Asset Type:** {ASSET_TYPE_LABELS.get(asset_type, asset_type)}\n"
-            f"• **Justification:** {justification or 'Not specified'}\n"
-            f"• **Inventory:** {stock['available']}/{stock['total']} available\n"
-            f"• **Status:** Pending Approval\n\n"
-            f"📋 **Approval Workflow:**\n"
-            f"  1. Manager Approval → 2. IT Approval → 3. Inventory Validation → 4. Fulfillment"
+        # Not confirmed yet — show the confirmation form
+        return self._render_asset_form(asset_type, justification, user_id)
+
+    def _render_asset_form(self, asset_type: str, justification: str, user_id: str) -> AgentResult:
+        stock = database.check_inventory(asset_type)
+        
+        return AgentResult(
+            response=(
+                f'<div class="adaptive-card">'
+                f'<div class="adaptive-card-header it"><i class="fas fa-laptop"></i> Request IT Asset — Review Details</div>'
+                f'<div class="adaptive-card-body">'
+                f'<p>Please confirm the details of your equipment request.</p>'
+                f'<div class="help-box" style="display:flex; flex-direction:column; gap:10px; margin-top:10px;">'
+                f'<select class="message-input ac-asset-type" style="width:100%;">'
+                + "".join([f'<option value="{k}" {"selected" if asset_type==k else ""}>{v}</option>' for k,v in ASSET_TYPE_LABELS.items()]) +
+                f'</select>'
+                f'<input type="text" class="message-input ac-justification" placeholder="Business justification..." style="width:100%;" value="{justification}" />'
+                f'<p style="font-size:12px; margin:0; opacity:0.8;"><i class="fas fa-warehouse"></i> Current Stock: {stock["available"]}/{stock["total"]} available</p>'
+                f'<button class="icon-btn" style="background:var(--accent); color:white; justify-content:center; width:100%; border-radius:8px;" onclick="submitAdaptiveAssetForm(this)"><i class="fas fa-check-circle"></i> Confirm & Request Asset</button>'
+                f'</div>'
+                f'</div></div>'
+            ),
+            tool_calls=[{"type": "adaptive_card", "card_type": "asset_request"}]
         )
-
-        return AgentResult(response=response, approval_required=True)
 
     def _view_tickets(self, user_id: str, role: str) -> AgentResult:
         """View tickets — employees see own, IT/admin see all."""
@@ -514,8 +601,27 @@ STRICT RULES:
         icon = "✅" if "resolved" in result.lower() else "❌"
         return AgentResult(response=f"{icon} {result}")
 
-    def _view_assets(self, user_id: str, role: str) -> AgentResult:
-        if role in ("it", "admin"):
+    def _resolve_all_tickets(self, user_id: str, role: str) -> AgentResult:
+        if role not in ("it", "admin"):
+            return AgentResult(response="🔒 **Access Denied** — Only IT team members can resolve all tickets.")
+        
+        tickets = database.get_all_tickets(status_filter="open")
+        if not tickets:
+            return AgentResult(response="✅ No open tickets to resolve.")
+        
+        count = 0
+        for t in tickets:
+            database.resolve_ticket(t["id"], user_id)
+            count += 1
+        return AgentResult(response=f"✅ Successfully resolved all {count} open tickets.")
+
+    def _view_assets(self, user_id: str, role: str, all_assets: bool = False) -> AgentResult:
+        if all_assets and role in ("it", "admin"):
+            assets = database.get_all_assets()
+            title = "🖥️ **All Asset Requests (IT View)**"
+        elif role in ("it", "admin"):
+            # If IT team but didn't ask for "all", show theirs or all? 
+            # Usually IT wants to see all.
             assets = database.get_all_assets()
             title = "🖥️ **All Asset Requests (IT View)**"
         else:
