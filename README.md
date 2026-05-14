@@ -14,13 +14,13 @@ We have provided one-command scripts for easy setup and execution on Windows.
 
 ### 1. Setup
 To create the virtual environment and install all necessary dependencies, simply run:
-```bash
-setup.bat
+```powershell
+.\setup.bat
 ```
 
 ### 2. Run the Server
 Once setup is complete, you can start the application with a single command:
-```bash
-run.bat
+```powershell
+.\run.bat
 ```
 This will automatically activate the virtual environment and start the FastAPI server with live reloading.
