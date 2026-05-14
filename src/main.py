@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 from fastapi import FastAPI, Depends
 from fastapi.responses import FileResponse
@@ -13,11 +14,10 @@ from src.tools.mcp_routes import router as tools_router
 from src.tools.database import (
     init_db, create_user, get_user_by_username,
     get_pending_approvals, approve_request, get_leave_by_id,
-    update_leave_status, list_leaves, get_pending_leaves,
+    process_leave_decision, list_leaves, get_pending_leaves,
     cancel_leave, get_leave_balance, get_all_leaves,
     get_hr_users, get_approvals_for_hr,
-    deduct_leave_balance, restore_leave_balance,
-    count_working_days, _get_conn,
+    _get_conn,
     # IT-specific
     get_ticket_by_id, list_tickets, get_all_tickets,
     get_open_tickets_for_user, get_it_pending_approvals,
@@ -74,6 +74,20 @@ class ChatResponse(BaseModel):
 
 VALID_ROLES = ["employee", "manager", "hr", "it", "finance", "admin"]
 
+_RESERVED_EMAIL_DOMAINS = {"example.com", "example.org", "example.net"}
+
+
+def _is_valid_email(email: str) -> bool:
+    email = (email or "").strip()
+    if not email:
+        return False
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        return False
+    domain = email.rsplit("@", 1)[-1].lower()
+    if domain in _RESERVED_EMAIL_DOMAINS:
+        return False
+    return True
+
 
 def create_app() -> FastAPI:
     setup_logging()
@@ -111,6 +125,9 @@ def create_app() -> FastAPI:
 
         if len(password) < 4:
             return AuthResponse(success=False, message="Password must be at least 4 characters.")
+
+        if not _is_valid_email(email):
+            return AuthResponse(success=False, message="Please enter a valid email address.")
 
         if role not in VALID_ROLES:
             return AuthResponse(success=False, message=f"Invalid role. Choose from: {', '.join(VALID_ROLES)}")
@@ -157,7 +174,7 @@ def create_app() -> FastAPI:
             success=True,
             token=token,
             username=user["username"],
-            email=user.get("email", f"{user['username']}@novigo.com"),
+            email=user.get("email", ""),
             role=user["role"],
             message="Login successful!",
         )
@@ -166,13 +183,37 @@ def create_app() -> FastAPI:
     def me(current_user: dict = Depends(get_current_user)) -> dict:
         """Return information about the currently authenticated user."""
         user = get_user_by_username(current_user["username"])
-        email = user.get("email", f"{current_user['username']}@novigo.com") if user else ""
+        email = user.get("email", "") if user else ""
         return {
             "user_id": current_user["user_id"],
             "username": current_user["username"],
             "email": email,
             "role": current_user["role"],
         }
+
+    class UpdateEmailRequest(BaseModel):
+        email: str
+
+    @app.post("/api/profile/email")
+    def update_my_email(req: UpdateEmailRequest, current_user: dict = Depends(get_current_user)) -> dict:
+        """Update the logged-in user's email address (used for notifications)."""
+        new_email = (req.email or "").strip()
+        if not _is_valid_email(new_email):
+            return {"success": False, "message": "Please enter a valid email address."}
+
+        conn = _get_conn()
+        cur = conn.cursor()
+        try:
+            cur.execute("UPDATE users SET email = ? WHERE username = ?", (new_email, current_user["username"]))
+            conn.commit()
+            if cur.rowcount == 0:
+                return {"success": False, "message": "User not found."}
+            return {"success": True, "email": new_email}
+        except Exception:
+            conn.rollback()
+            return {"success": False, "message": "Email update failed. Email may already be in use."}
+        finally:
+            conn.close()
 
     class ChangePasswordRequest(BaseModel):
         old_password: str
@@ -311,12 +352,8 @@ def create_app() -> FastAPI:
         if row:
             req_type, req_id = row
             if req_type == "leave":
-                update_leave_status(req_id, decision.status)
-                leave = get_leave_by_id(req_id)
-                if leave and decision.status == "approved":
-                    days = count_working_days(leave["start_date"], leave["end_date"])
-                    leave_type = leave.get("leave_type", "casual") or "casual"
-                    deduct_leave_balance(leave["user_id"], leave_type, days)
+                # Centralized leave decision logic (also triggers Power Automate notification)
+                process_leave_decision(req_id, decision.status, current_user["username"])
             elif req_type == "ticket":
                 new_status = "in_progress" if decision.status == "approved" else "closed"
                 update_ticket_status(req_id, new_status)

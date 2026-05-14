@@ -163,6 +163,25 @@ If the user wants to approve/reject a leave, set the intent to "approve_leave" o
         assigned_hr = parsed.get("hr") or ""
         reason = parsed.get("reason") or ""
 
+        # For CONFIRM flows (adaptive-card submit button), prefer deterministic parsing
+        # from the submitted text. This prevents losing the typed reason if the LLM
+        # returns partial JSON.
+        if query.strip().upper().startswith("CONFIRM"):
+            dates = _extract_dates(query)
+            if not start_date and dates:
+                start_date = dates[0]
+            if not end_date:
+                end_date = dates[1] if len(dates) > 1 else start_date
+
+            leave_type = _extract_leave_type(query) or leave_type
+
+            extracted_reason = _extract_reason(query)
+            if extracted_reason:
+                reason = extracted_reason
+
+            if not assigned_hr:
+                assigned_hr = _extract_hr(query)
+
         if not start_date or not end_date or not query.strip().upper().startswith("CONFIRM"):
             # Return an adaptive card for leave application form (pre-filled if data exists)
             return self._render_leave_form(user_id, parsed)

@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+import httpx
+
 from src.settings import get_config
 
 
@@ -288,7 +290,7 @@ def get_user_by_id(user_id: int) -> dict | None:
     conn = _get_conn()
     cur = conn.cursor()
     cur.execute(
-        "SELECT id, username, password_hash, role, created_at FROM users WHERE id = ?",
+        "SELECT id, username, email, password_hash, role, created_at FROM users WHERE id = ?",
         (user_id,),
     )
     row = cur.fetchone()
@@ -298,9 +300,10 @@ def get_user_by_id(user_id: int) -> dict | None:
     return {
         "id": row[0],
         "username": row[1],
-        "password_hash": row[2],
-        "role": row[3],
-        "created_at": row[4],
+        "email": row[2],
+        "password_hash": row[3],
+        "role": row[4],
+        "created_at": row[5],
     }
 
 
@@ -634,6 +637,54 @@ def process_leave_decision(leave_id: int, status: str, approver_id: str) -> str:
     
     conn.commit()
     conn.close()
+
+    # 4. Notify employee via Power Automate (best-effort; never blocks the decision)
+    try:
+        config = get_config()
+        if config.power_automate_email_url:
+            user = get_user_by_username(leave["user_id"])
+            if not user:
+                # Some call paths might store a numeric user id in leaves.user_id
+                try:
+                    user = get_user_by_id(int(str(leave["user_id"]).strip()))
+                except Exception:
+                    user = None
+
+            to_email = (user.get("email") if user else "") or ""
+            to_email_l = to_email.strip().lower()
+
+            # Skip clearly invalid or reserved test emails to avoid noisy bounces
+            if (not to_email_l) or ("@" not in to_email_l) or to_email_l.endswith(("@example.com", "@example.org", "@example.net")):
+                log_event(
+                    leave.get("user_id", ""),
+                    "power_automate_notify_skipped",
+                    f"leave_id={leave_id} status={status} to={to_email_l or 'EMPTY'}",
+                )
+                raise RuntimeError("skip_notify_invalid_recipient")
+
+            days = count_working_days(leave["start_date"], leave["end_date"])
+            leave_type = leave.get("leave_type", "casual") or "casual"
+            subj_status = "approved" if status == "approved" else "rejected"
+            payload = {
+                "to": to_email,
+                "subject": f"Leave request #{leave_id} {subj_status}",
+                "body": (
+                    f"Hello {leave['user_id']},\n\n"
+                    f"Your leave request #{leave_id} ({leave_type}) for {leave['start_date']} to {leave['end_date']} "
+                    f"({days} working days) was {subj_status} by {approver_id}.\n\n"
+                    + (f"Reason provided: {leave.get('reason','') or 'N/A'}\n\n")
+                    + "Regards,\nHR"
+                ),
+            }
+            httpx.post(config.power_automate_email_url, json=payload, timeout=10)
+    except Exception as e:
+        # Avoid breaking approvals if external notification fails
+        try:
+            # Ignore intentional skip marker, still keep approvals working
+            if str(e) != "skip_notify_invalid_recipient":
+                log_event(leave.get("user_id", ""), "power_automate_notify_failed", f"leave_id={leave_id} status={status} err={e}")
+        except Exception:
+            pass
     
     # 3. If approved, deduct from balance
     if status == "approved":

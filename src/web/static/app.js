@@ -304,11 +304,11 @@ function populateUserInfo() {
     if (cachedEmail) {
       dashEmail.textContent = cachedEmail;
     } else {
-      dashEmail.textContent = `${AUTH_USERNAME}@novigo.com`;
+      dashEmail.textContent = "";
       fetch("/auth/me", { headers: { Authorization: "Bearer " + AUTH_TOKEN } })
         .then(r => r.json())
         .then(data => {
-          const email = data.email || `${AUTH_USERNAME}@novigo.com`;
+          const email = data.email || "";
           dashEmail.textContent = email;
           localStorage.setItem("auth.email", email);
         })
