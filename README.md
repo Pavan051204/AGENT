@@ -9,7 +9,18 @@ This project is a multi-agent AI system designed for enterprise environments. It
 - **FastAPI Backend**: High-performance backend routing requests and exposing RESTful endpoints.
 
 ## Getting Started
-To run the server locally:
+
+We have provided one-command scripts for easy setup and execution on Windows.
+
+### 1. Setup
+To create the virtual environment and install all necessary dependencies, simply run:
 ```bash
-uvicorn src.main:app --reload
+setup.bat
 ```
+
+### 2. Run the Server
+Once setup is complete, you can start the application with a single command:
+```bash
+run.bat
+```
+This will automatically activate the virtual environment and start the FastAPI server with live reloading.
